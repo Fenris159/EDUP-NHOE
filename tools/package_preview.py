@@ -10,7 +10,8 @@ import struct
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.10.1-preview.1"
+VERSION = "0.11.0-preview.1"
+PLATFORMS = ("windows-x64", "linux-proton-x64", "macos-crossover-x64")
 GAME_SHA256 = "ed5a8f8cd10f9a80d3bda5badd7ba1d4fcfc15996c8c7e018852cb170e264b63"
 SDK = ROOT / "third_party/gameinput/4.0.306"
 OPENVR = ROOT / "third_party/openvr/0924064316de3effbcd1acf1e309182a2deb1c05"
@@ -21,7 +22,9 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def assemble(platform, windows, linux, destination):
+def collect(platform, windows, linux, gamepad):
+    if platform not in PLATFORMS:
+        raise ValueError(f"Unsupported platform: {platform}")
     files = {}
 
     def add(name, source):
@@ -29,8 +32,12 @@ def assemble(platform, windows, linux, destination):
             raise ValueError(f"Duplicate package path: {name}")
         files[name] = source.read_bytes()
 
-    add("Copy-to-game/dinput8.dll", windows / "experimental-proxy/dinput8.dll")
-    add("Existing-chain/dinput8.dll", windows / "experimental-chain-proxy/dinput8.dll")
+    mac = platform == "macos-crossover-x64"
+    if mac:
+        add("Copy-to-game/dinput8.dll", gamepad / "crossover-dinput8/dinput8.dll")
+    else:
+        add("Copy-to-game/dinput8.dll", windows / "experimental-proxy/dinput8.dll")
+        add("Existing-chain/dinput8.dll", windows / "experimental-chain-proxy/dinput8.dll")
     for name, expected in {
         "GameInputRedist.dll": "156030ed7928791df36ab9033061a151be61251054c45cf3ae65cd460509b04e",
         "GameInputRawInputProxy.exe": "d5d34853ccc9d9f8f19644cf71ffba625d0575bbb80ab19fbc2882b632aee174",
@@ -38,32 +45,42 @@ def assemble(platform, windows, linux, destination):
         add("Copy-to-game/" + name, SDK / "native/bin/x64" / name)
         if digest(files["Copy-to-game/" + name]) != expected:
             raise ValueError(f"Pinned SDK file changed: {name}")
-    files["Copy-to-game/ed-onfoot-haptics.ini"] = b"[OnFoot]\r\nEnabled=1\r\nStrength=60\r\n"
+    files["Copy-to-game/ed-onfoot-haptics.ini"] = b"[OnFoot]\r\nEnabled=1\r\nStrength=60\r\n\r\n[Controller]\r\nOutput=auto\r\n"
     helper = "Copy-to-game/ed-vr-haptics/"
-    add(helper + "ed-vr-openxr.dll", windows / "openxr/ed-vr-openxr.dll")
-    add(helper + "ed-vr-openxr.json", ROOT / "vr/ed-vr-openxr.json")
+    if not mac:
+        add(helper + "ed-vr-openxr.dll", windows / "openxr/ed-vr-openxr.dll")
+        add(helper + "ed-vr-openxr.json", ROOT / "vr/ed-vr-openxr.json")
     if platform == "windows-x64":
         add(helper + "ed-vr-haptics.exe", windows / "ed-vr-haptics.exe")
         add(helper + "openvr_api.dll", OPENVR / "bin/win64/openvr_api.dll")
         document = "INSTALL-WINDOWS.txt"
-    else:
+    elif platform == "linux-proton-x64":
         add(helper + "ed-vr-haptics", linux / "ed-vr-haptics")
         add(helper + "libed-vr-openxr.so", linux / "libed-vr-openxr.so")
         add(helper + "libopenvr_api.so", OPENVR / "bin/linux64/libopenvr_api.so")
         add(helper + "launch-with-vr.sh", ROOT / "vr/launch-with-vr.sh")
         document = "INSTALL-LINUX.txt"
-    for source in sorted((ROOT / "vr/resources").iterdir()):
-        if source.is_file():
-            add(helper + "resources/" + source.name, source)
-    for name, source in {"GameInput.txt": SDK / "LICENSE.txt", "MinHook.txt": ROOT / "third_party/minhook/LICENSE.txt",
-                         "OpenVR.txt": OPENVR / "LICENSE", "OpenXR.txt": OPENXR / "LICENSES/MIT.txt"}.items():
+    else:
+        files["Copy-to-game/ed-vr-haptics.ini"] = b"[VR]\r\nEnabled=0\r\n"
+        document = "INSTALL-MAC.txt"
+    if not mac:
+        for source in sorted((ROOT / "vr/resources").iterdir()):
+            if source.is_file():
+                add(helper + "resources/" + source.name, source)
+    notices = {"GameInput.txt": SDK / "LICENSE.txt", "MinHook.txt": ROOT / "third_party/minhook/LICENSE.txt"}
+    if not mac:
+        notices.update({"OpenVR.txt": OPENVR / "LICENSE", "OpenXR.txt": OPENXR / "LICENSES/MIT.txt"})
+    for name, source in notices.items():
         add("notices/" + name, source)
-    registration = (ROOT / "docs/OPENXR.txt").read_text()
-    intro, remainder = registration.split("\nWINDOWS\n", 1)
-    win, remainder = remainder.split("\nLINUX - NATIVE OPENXR LOADER\n", 1)
-    native, limits = remainder.split("\nLIMITS\n", 1)
-    selected = "WINDOWS\n" + win if platform == "windows-x64" else "LINUX - NATIVE OPENXR LOADER\n" + native
-    files["INSTALL.txt"] = ((ROOT / "docs" / document).read_text() + "\n" + intro + "\n" + selected + "\nLIMITS\n" + limits).encode()
+    instructions = (ROOT / "docs" / document).read_text()
+    if not mac:
+        registration = (ROOT / "docs/OPENXR.txt").read_text()
+        intro, remainder = registration.split("\nWINDOWS\n", 1)
+        win, remainder = remainder.split("\nLINUX - NATIVE OPENXR LOADER\n", 1)
+        native, limits = remainder.split("\nLIMITS\n", 1)
+        selected = "WINDOWS\n" + win if platform == "windows-x64" else "LINUX - NATIVE OPENXR LOADER\n" + native
+        instructions += "\n" + intro + "\n" + selected + "\nLIMITS\n" + limits
+    files["INSTALL.txt"] = instructions.encode()
     for name, data in files.items():
         path = PurePosixPath(name)
         if path.is_absolute() or ".." in path.parts:
@@ -76,12 +93,19 @@ def assemble(platform, windows, linux, destination):
             offset = struct.unpack_from("<I", data, 0x3c)[0]
             if data[offset:offset + 4] != b"PE\0\0" or struct.unpack_from("<H", data, offset + 4)[0] != 0x8664:
                 raise ValueError(f"Expected x64 Windows proxy: {name}")
-    manifest = {"schema": 1, "profile": "edup-nhoe", "version": VERSION, "platform": platform,
+    manifest = {"schema": 2, "profile": "edup-nhoe", "version": VERSION, "platform": platform,
                 "game_sha256": GAME_SHA256, "physical_vr_output_verified": False,
                 "gait_boundary_live_verified": False, "automatic_system_configuration": False,
-                "preserve_existing": ["ed-onfoot-haptics.ini"],
+                "mac_physical_output_verified": False, "vr_included": not mac,
+                "output_routing": "game-slots" if mac else "xinput-detour",
+                "linux_hid_compat_included": not mac,
+                "preserve_existing": ["ed-onfoot-haptics.ini", "ed-vr-haptics.ini"],
                 "supplied_files_sha256": {name: digest(data) for name, data in sorted(files.items())}}
     files["manifest.json"] = (json.dumps(manifest, indent=2) + "\n").encode()
+    return files
+
+
+def write_package(platform, files, destination):
     destination.mkdir(parents=True, exist_ok=True)
     output = destination / f"EDUP-NHOE-{VERSION}-{platform}.zip"
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
@@ -102,14 +126,20 @@ def assemble(platform, windows, linux, destination):
     return {"path": str(output), "sha256": checksum, "files": len(files)}
 
 
+def assemble_all(windows, linux, gamepad, destination):
+    # Validate every platform before writing any release output.
+    contents = {platform: collect(platform, windows, linux, gamepad) for platform in PLATFORMS}
+    return [write_package(platform, files, destination) for platform, files in contents.items()]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--windows-build", type=Path, required=True)
     parser.add_argument("--linux-build", type=Path, required=True)
+    parser.add_argument("--gamepad-build", type=Path, required=True, help="Root Windows build containing the CrossOver proxy")
     parser.add_argument("--output", type=Path, default=ROOT / "dist")
     args = parser.parse_args()
-    packages = [assemble(platform, args.windows_build.resolve(), args.linux_build.resolve(), args.output.resolve())
-                for platform in ("windows-x64", "linux-proton-x64")]
+    packages = assemble_all(args.windows_build.resolve(), args.linux_build.resolve(), args.gamepad_build.resolve(), args.output.resolve())
     print(json.dumps(packages, indent=2))
 
 

@@ -3,6 +3,9 @@
 #include "edtrace/gameinput_output.hpp"
 #include "edtrace/authored_triggers.hpp"
 #include "MinHook.h"
+#ifdef ED_CROSSOVER_COMPAT
+#include "edtrace/output_slot_router.hpp"
+#endif
 #ifdef ED_VR_HAPTICS_MIRROR
 #include "edtrace/vr_output.hpp"
 #endif
@@ -121,10 +124,16 @@ DWORD WINAPI Output(DWORD index, XINPUT_VIBRATION* vibration) noexcept {
 }}
 
 namespace edtrace {
-DWORD XInputOutputStart(MotorBackend target, std::uintptr_t image, std::size_t size, bool verified) noexcept {
+DWORD XInputOutputStart(MotorBackend target, std::uintptr_t image, std::size_t size, bool verified, MotorBackend dynamic_target) noexcept {
   if (!verified || !image || size <= kWwiseRetryReturnRva || !target) return ERROR_REVISION_MISMATCH;
   if (original.load()) return ERROR_ALREADY_INITIALIZED;
   main_image = image; main_size = size;
+#ifdef ED_CROSSOVER_COMPAT
+  original.store(target, std::memory_order_release);
+  const DWORD result = OutputSlotsStart(image, size, verified, target, dynamic_target ? dynamic_target : target, &Output);
+  if (result) { error.store(result); return result; }
+#else
+  (void)dynamic_target;
   const auto initialization = MH_Initialize();
   if (initialization != MH_OK && initialization != MH_ERROR_ALREADY_INITIALIZED) return ERROR_NOT_SUPPORTED;
   void* trampoline = nullptr;
@@ -136,13 +145,25 @@ DWORD XInputOutputStart(MotorBackend target, std::uintptr_t image, std::size_t s
   if (MH_EnableHook(reinterpret_cast<void*>(target)) != MH_OK) {
     error.store(ERROR_NOT_SUPPORTED); return ERROR_NOT_SUPPORTED;
   }
+#endif
   installed.store(true, std::memory_order_release); error.store(ERROR_SUCCESS);
   return ERROR_SUCCESS;
+}
+bool XInputOutputRefresh() noexcept {
+#ifdef ED_CROSSOVER_COMPAT
+  const bool result = OutputSlotsRefresh(); error.store(OutputSlotsError()); return result;
+#else
+  return installed.load(std::memory_order_acquire);
+#endif
 }
 void XInputOutputSetReady(bool gain_enabled, bool controller_connected, bool focused) noexcept {
   const DWORD incoming = GetLastError();
   AcquireSRWLockExclusive(&mixer_lock);
-  const bool enabled = installed.load(std::memory_order_acquire) && gain_enabled && controller_connected;
+  const bool enabled = installed.load(std::memory_order_acquire) && gain_enabled && controller_connected
+#ifdef ED_CROSSOVER_COMPAT
+    && OutputSlotsReady()
+#endif
+    ;
   gamepad_focused = focused;
   ready.store(enabled, std::memory_order_release);
   if (!enabled) { authored_request = {}; authored_left = 0; authored_right = 0; onfoot_frame = {}; }

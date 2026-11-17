@@ -8,3 +8,4 @@ EXPORTS
     MockRead @1002
     MockWaitUntilBlocked @1003
     MockRelease @1004
+    MockAlternateSet @1005

@@ -1,4 +1,4 @@
-EDUP - NHOE 0.10.1 PREVIEW - LINUX / PROTON DRAG-AND-DROP
+EDUP - NHOE 0.11.0 PREVIEW - LINUX / PROTON DRAG-AND-DROP
 
 INSTALL
 1. Close Elite and the Frontier launcher. Find the folder containing
@@ -51,6 +51,9 @@ The OpenXR instance API version and enabled extension list are preserved.
 SETTINGS AND CONTROLLERS
 ed-onfoot-haptics.ini enables the added effects at 60% on a clean install.
 Set [OnFoot] Enabled=0 to use original authored effects only.
+Haptic output defaults to [Controller] Output=auto (GameInput with XInput
+fallback). Set Output=xinput and restart Elite to force the two-motor fallback
+for troubleshooting. This does not change controller input or bindings.
 Walking vibration is disabled. Running/sprinting contacts retain feedback
 when native humanoid-speed metadata exceeds 2.0. This inferred gait boundary
 and surface coverage need gameplay feedback; unknown gait stays silent.

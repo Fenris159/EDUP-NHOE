@@ -1,6 +1,6 @@
 # Preview feedback
 
-Report the package version, operating system, Proton version if applicable, controller model, USB/Bluetooth/wireless connection, Steam Input state, and VR frontend/runtime if used.
+Report the package version, operating system, Proton version if applicable, controller model, USB/Bluetooth/wireless connection, Steam Input state, and VR frontend/runtime if used. For Mac, include CPU, CrossOver version, bottle engine (Rosetta or ARM64EC/FEX), selected Controller Output mode and the newest restoration-status.json. Mac physical output remains untested; its package is gamepad only.
 
 Test one action at a time and report what you felt:
 

@@ -31,6 +31,7 @@ std::atomic<DWORD> start_error{ERROR_NOT_READY};
 std::atomic<bool> profile_match{false}, stopped{false};
 std::wstring log_directory;
 std::atomic<DWORD> gameinput_error{ERROR_FILE_NOT_FOUND};
+std::atomic<bool> gameinput_requested{true};
 std::atomic<DWORD> trigger_hook_error{ERROR_NOT_READY}, trigger_trace_error{ERROR_NOT_READY};
 std::atomic<DWORD> onfoot_trace_error{0};
 constexpr char gameinput_runtime_sha256[] = "156030ed7928791df36ab9033061a151be61251054c45cf3ae65cd460509b04e";
@@ -113,6 +114,13 @@ void SaveStatus() noexcept {
     const auto s = RestorationGetStatus();
     const std::string text = std::string("{\"schema\":7,\"host\":\"dinput8\",\"output\":\"") + (s.gameinput_selected ? (s.gameinput_compat_ready ? "gameinput-compat-hid" : "gameinput") : "xinput") + "\",\"profile_match\":" + std::to_string(s.profile_match) +
       ",\"start_error\":" + std::to_string(s.start_error) + ",\"output_hook\":" + std::to_string(s.output_hook) +
+      ",\"output_hook_error\":" + std::to_string(XInputOutputGetStats().error) +
+      ",\"controller_output_mode\":\"" + (gameinput_requested.load() ? "auto" : "xinput") + "\"" +
+#ifdef ED_CROSSOVER_COMPAT
+      ",\"platform_profile\":\"macos-crossover\",\"output_routing\":\"game-slots\"" +
+#else
+      ",\"platform_profile\":\"standard\",\"output_routing\":\"xinput-detour\"" +
+#endif
       ",\"headroom\":" + std::to_string(s.headroom) + ",\"gain_enabled\":" + std::to_string(s.gain_enabled) +
       ",\"routing_ready\":" + std::to_string(s.routing_ready) + ",\"stopped\":" + std::to_string(s.stopped) +
       ",\"motor_calls\":" + std::to_string(s.motor_calls) + ",\"wwise_calls\":" + std::to_string(s.wwise_calls) +
@@ -197,12 +205,20 @@ DWORD WINAPI Run(void*) noexcept {
     if (!library) throw GetLastError();
     const auto set = Symbol<MotorBackend>(library, "XInputSetState");
     const auto capabilities = Symbol<GetCapabilitiesFn>(library, "XInputGetCapabilities");
-    // The original import and Wwise's named lookup must reach the same function.
+    // Verify the named lookup; the CrossOver profile separately preserves
+    // the game's import thunk when it differs from GetProcAddress.
     MotorBackend imported = nullptr;
     const auto named = GetModuleHandleW(L"xinput9_1_0.dll");
     if (!set || !capabilities || !named || Symbol<MotorBackend>(named, "XInputSetState") != set ||
-        !Read(image + 0x4db6c60, imported) || imported != set) throw DWORD(ERROR_INVALID_FUNCTION);
+        !Read(image + 0x4db6c60, imported) || !imported) throw DWORD(ERROR_INVALID_FUNCTION);
+#ifdef ED_CROSSOVER_COMPAT
+    // The game import and GetProcAddress may use different interop thunks in
+    // an ARM64EC bottle. Preserve the game's own native call binding.
+    result = XInputOutputStart(imported, image, size, true, set);
+#else
+    if (imported != set) throw DWORD(ERROR_INVALID_FUNCTION);
     result = XInputOutputStart(set, image, size, true);
+#endif
     if (result) throw result;
     result = MotorHeadroomStart(image, true);
     if (result) throw result;
@@ -231,7 +247,11 @@ DWORD WINAPI Run(void*) noexcept {
     const auto gameinput_path = directory + L"\\GameInputRedist.dll";
     const auto helper_path = directory + L"\\GameInputRawInputProxy.exe";
     const auto existing_runtime = GetModuleHandleW(L"GameInputRedist.dll");
-    if (Hash(gameinput_path) == gameinput_runtime_sha256 && Hash(helper_path) == gameinput_helper_sha256 &&
+    std::array<wchar_t,16> output_mode{};
+    GetPrivateProfileStringW(L"Controller",L"Output",L"auto",output_mode.data(),static_cast<DWORD>(output_mode.size()),onfoot_config.c_str());
+    gameinput_requested.store(_wcsicmp(output_mode.data(),L"xinput") != 0);
+    if (!gameinput_requested.load()) gameinput_error.store(ERROR_NOT_SUPPORTED);
+    else if (Hash(gameinput_path) == gameinput_runtime_sha256 && Hash(helper_path) == gameinput_helper_sha256 &&
         (!existing_runtime || Hash(Path(existing_runtime)) == gameinput_runtime_sha256)) {
       gameinput_error.store(GameInputOutputStart(gameinput_path, XInputOutputNativeBackend()));
     } else if (GetFileAttributesW(gameinput_path.c_str()) != INVALID_FILE_ATTRIBUTES) gameinput_error.store(ERROR_REVISION_MISMATCH);
@@ -256,10 +276,11 @@ DWORD WINAPI Run(void*) noexcept {
       output_connected = VrOutputPoll(gain.enabled,focused) || connected;
       haptic_focused = focused || VrOutputGetStats().focused;
 #endif
-      GameInputOutputPoll(gain.enabled && connected, focused);
-      AuthoredTriggersSetReady(gain.enabled && output_connected && haptic_focused);
-      XInputOutputSetReady(gain.enabled && haptic_focused, output_connected, focused);
-      TickOnFootFeedback(feedback_allowed && gain.enabled && output_connected && haptic_focused,GetTickCount64());
+      const bool output_bound = XInputOutputRefresh();
+      GameInputOutputPoll(gain.enabled && connected && output_bound, focused);
+      AuthoredTriggersSetReady(gain.enabled && output_connected && haptic_focused && output_bound);
+      XInputOutputSetReady(gain.enabled && haptic_focused && output_bound, output_connected, focused);
+      TickOnFootFeedback(feedback_allowed && gain.enabled && output_connected && haptic_focused && output_bound,GetTickCount64());
       if (++control_ticks >= 25) {
         control_ticks = 0;
         if (feedback_requested) {

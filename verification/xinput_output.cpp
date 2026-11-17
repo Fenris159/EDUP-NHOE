@@ -1,5 +1,8 @@
 #include "edtrace/xinput_output.hpp"
 #include "edtrace/onfoot_runtime.hpp"
+#ifdef ED_CROSSOVER_COMPAT
+#include "edtrace/output_slot_router.hpp"
+#endif
 #include "mock_api.hpp"
 #include "result_file.hpp"
 #include <array>
@@ -18,6 +21,7 @@ template <typename T> T Symbol(HMODULE module, const char* name) {
 using Set = DWORD (WINAPI*)(DWORD, XINPUT_VIBRATION*);
 using Get = DWORD (WINAPI*)(DWORD, XINPUT_STATE*);
 using Caps = DWORD (WINAPI*)(DWORD, DWORD, XINPUT_CAPABILITIES*);
+#ifndef ED_CROSSOVER_COMPAT
 Set Stub(BYTE* image, std::uintptr_t return_rva, Set target) {
   // A real executable caller with the literal verified return RVA; no mock of
   // the internal classifier. The only external dependency is the DLL backend.
@@ -29,6 +33,17 @@ Set Stub(BYTE* image, std::uintptr_t return_rva, Set target) {
   FlushInstructionCache(GetCurrentProcess(), code, 21);
   Set function{}; std::memcpy(&function, &code, sizeof(function)); return function;
 }
+#endif
+#ifdef ED_CROSSOVER_COMPAT
+Set SlotStub(BYTE* image, std::uintptr_t return_rva, void* slot) {
+  BYTE* code = image + return_rva - 16;
+  const BYTE prologue[]{0x48,0x83,0xec,0x28,0x48,0xb8};
+  std::memcpy(code,prologue,sizeof(prologue)); std::memcpy(code+6,&slot,8);
+  const BYTE tail[]{0xff,0x10,0x48,0x83,0xc4,0x28,0xc3};
+  std::memcpy(code+14,tail,sizeof(tail)); FlushInstructionCache(GetCurrentProcess(),code,21);
+  Set function{}; std::memcpy(&function,&code,sizeof(function)); return function;
+}
+#endif
 }
 int wmain(int argc, wchar_t** argv) {
   if (argc == 4) verification_result_path = argv[3];
@@ -39,18 +54,57 @@ int wmain(int argc, wchar_t** argv) {
   const auto caps = Symbol<Caps>(library, "XInputGetCapabilities");
   const auto reset = Symbol<MockResetFn>(library, "MockReset");
   const auto read = Symbol<MockReadFn>(library, "MockRead");
-  constexpr std::size_t size = 0x4d10000;
+  constexpr std::size_t size =
+#ifdef ED_CROSSOVER_COMPAT
+    0x6058000;
+#else
+    0x4d10000;
+#endif
   auto* image = static_cast<BYTE*>(VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
   Check(image != nullptr, "owned caller image allocated");
+#ifdef ED_CROSSOVER_COMPAT
+  auto* import_slot = reinterpret_cast<Set*>(image+edtrace::kMotorImportSlotRva);
+  auto* audio_slot = reinterpret_cast<Set*>(image+edtrace::kMotorWwiseSlotRva);
+  const auto alternate = Symbol<Set>(library,"MockAlternateSet");
+  *import_slot = set; *audio_slot = nullptr;
+  const auto engine = SlotStub(image,0x5c8535,import_slot);
+  const auto wwise = SlotStub(image,0x4d05312,audio_slot);
+  const auto retry = SlotStub(image,0x4d05395,audio_slot);
+  std::array<BYTE,32> set_before{}; std::memcpy(set_before.data(),reinterpret_cast<void*>(set),set_before.size());
+  const auto base = reinterpret_cast<std::uintptr_t>(image);
+  Check(edtrace::OutputSlotsStart(base,edtrace::kMotorWwiseSlotRva+7,true,set,alternate,engine)==ERROR_REVISION_MISMATCH,
+        "truncated image cannot install pointer route");
+  Check(edtrace::OutputSlotsStart(base+1,size,true,set,alternate,engine)==ERROR_REVISION_MISMATCH,
+        "unaligned image cannot install atomic pointer route");
+  *audio_slot=reinterpret_cast<Set>(static_cast<std::uintptr_t>(0x12345678));
+  Check(edtrace::OutputSlotsStart(base,size,true,set,alternate,engine)==ERROR_ALREADY_EXISTS&&*import_slot==set,
+        "foreign audio binding rejects installation without changing import");
+  *audio_slot=nullptr;
+#else
   const auto engine = Stub(image, 0x5c8535, set);
   const auto wwise = Stub(image, 0x4d05312, set);
   const auto retry = Stub(image, 0x4d05395, set);
+#endif
   std::array<BYTE, 32> get_before{}, caps_before{};
   std::memcpy(get_before.data(), reinterpret_cast<void*>(get), get_before.size());
   std::memcpy(caps_before.data(), reinterpret_cast<void*>(caps), caps_before.size());
   const bool verified = std::wcscmp(argv[2], L"unknown") != 0;
-  const DWORD installed = edtrace::XInputOutputStart(set, reinterpret_cast<std::uintptr_t>(image), size, verified);
+  const DWORD installed = edtrace::XInputOutputStart(set, reinterpret_cast<std::uintptr_t>(image), size, verified
+#ifdef ED_CROSSOVER_COMPAT
+    ,alternate
+#endif
+    );
   Check(installed == (verified ? ERROR_SUCCESS : ERROR_REVISION_MISMATCH), "only verified profiles install motor hook");
+#ifdef ED_CROSSOVER_COMPAT
+  Check(!std::memcmp(set_before.data(),reinterpret_cast<void*>(set),set_before.size()),"CrossOver never detours native XInput code");
+  if(verified) {
+    Check(!edtrace::XInputOutputRefresh(),"uninitialized audio binding remains quiet");
+    edtrace::XInputOutputSetReady(true,true);
+    Check(!edtrace::XInputOutputGetStats().ready,"missing audio binding cannot enable output");
+  } else Check(*import_slot==set&&!*audio_slot,"unknown profile changes neither output slot");
+  *audio_slot=alternate;
+  if(verified) Check(edtrace::XInputOutputRefresh(),"late audio binding supports a distinct interop thunk");
+#endif
   Check(!std::memcmp(get_before.data(), reinterpret_cast<void*>(get), get_before.size()) &&
         !std::memcmp(caps_before.data(), reinterpret_cast<void*>(caps), caps_before.size()), "detection and input entry points remain unchanged");
   reset();
@@ -209,6 +263,24 @@ int wmain(int argc, wchar_t** argv) {
   edtrace::XInputOutputSetReady(false, true);
   Check(wwise(1, &zero) == 0, "disabled restoration remains native"); read(&snapshot);
   Check(snapshot.index == 1, "unverified gain disables remapping");
+#ifdef ED_CROSSOVER_COMPAT
+  if(verified) {
+    *audio_slot=nullptr;
+    Check(!edtrace::XInputOutputRefresh(),"audio shutdown releases slot readiness");
+    edtrace::XInputOutputSetReady(true,true);
+    Check(!edtrace::XInputOutputGetStats().ready,"audio shutdown cannot keep output ready");
+    *audio_slot=alternate;
+    Check(edtrace::XInputOutputRefresh(),"recognized audio reinitialization can resume");
+    *audio_slot=reinterpret_cast<Set>(static_cast<std::uintptr_t>(0x12345678));
+    Check(!edtrace::XInputOutputRefresh()&&reinterpret_cast<std::uintptr_t>(*audio_slot)==0x12345678,
+          "foreign audio slot is never overwritten");
+    edtrace::XInputOutputSetReady(true,true);
+    Check(!edtrace::XInputOutputGetStats().ready,"foreign slot ownership faults output quiet");
+    *audio_slot=alternate;
+    Check(!edtrace::XInputOutputRefresh()&&*audio_slot==alternate,"faulted slot route never silently reacquires");
+  }
+  Check(!std::memcmp(set_before.data(),reinterpret_cast<void*>(set),set_before.size()),"all CrossOver output leaves native API body untouched");
+#endif
   std::puts("PASS output interception, authored stops, ownership, input/detection preservation and profile/readiness guards");
   Check(VerificationResult("PASS"), "result file written");
   return 0;

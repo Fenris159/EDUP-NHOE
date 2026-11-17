@@ -27,6 +27,8 @@ The verification command uses Wine and an isolated prefix inside the build direc
 
 The standalone DLL is `build/windows/restoration-dinput8/dinput8.dll`. The chain variant is `build/windows/restoration-dinput8-chain/dinput8.dll` and requires the explicitly preserved prior bootstrap described in the installation instructions. Do not treat it as an automatic merger for unrelated mods.
 
+The same build creates `build/windows/crossover-dinput8/dinput8.dll`. This Mac/CrossOver profile uses guarded game-side output slots, omits VR and the Linux HID compatibility hooks, and preserves native GameInput capabilities. Its owned tests check late audio initialization, reinitialization, foreign slot ownership, input preservation and unchanged native XInput code. They do not replace physical Mac testing.
+
 ## Windows VR build
 
 ```sh
@@ -56,7 +58,11 @@ After the builds above:
 
 ```sh
 python3 tools/package_preview.py \
-  --windows-build build/vr-windows --linux-build build/vr-linux
+  --windows-build build/vr-windows --linux-build build/vr-linux \
+  --gamepad-build build/windows
+python3 tools/verify_release.py --directory dist
 ```
 
-This creates Windows and Linux/Proton ZIPs under `dist`, each with `INSTALL.txt`, file hashes, dependency notices and separate standalone/chain proxies. It reads build artifacts and project resources only. It does not locate, launch or install into a game directory. Package assembly is distinct from hardware validation; test custom builds before distributing them.
+This always creates Windows, Linux/Proton and Mac/CrossOver ZIPs under `dist`, each with `INSTALL.txt`, file hashes, dependency notices and a companion SHA-256 file. All three platforms are validated before any ZIP is written. Windows/Linux include standalone and chain proxies; Mac contains a single gamepad proxy. It reads build artifacts and project resources only and does not locate, launch or install into a game directory. Package assembly is distinct from hardware validation; test custom builds before distributing them.
+
+Run `python3 verification/package_preview.py` for hermetic packaging checks. Before publishing, complete the local Kilo review and required checks, then use `python3 tools/verify_release.py --directory dist --publish --notes-file RELEASE-NOTES.txt`. Prepare that notes file first. The command requires all three matching-version packages and checksums, rejects changed members and publishes a GitHub prerelease with all six assets. It requires the release commit and lightweight tag to exist on public `main` with successful CI; push the reviewed commit first. Never publish private analysis files or logs.

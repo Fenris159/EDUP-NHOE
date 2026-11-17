@@ -48,6 +48,9 @@ extern "C" DWORD WINAPI XInputGetState(DWORD index, XINPUT_STATE* state) {
   if (state) *state = {0x13579bdf, {0x246, 0x12, 0x34, -1234, 2345, -3456, 4567}};
   SetLastError(0x11223344); return 0x10203040;
 }
+extern "C" DWORD WINAPI MockAlternateSet(DWORD index, XINPUT_VIBRATION* vibration) {
+  return XInputSetState(index,vibration);
+}
 
 extern "C" DWORD WINAPI XInputGetCapabilities(DWORD index, DWORD flags, XINPUT_CAPABILITIES* capabilities) {
   const DWORD error = GetLastError();

@@ -14,6 +14,7 @@ jobs:
       - run: ctest --test-dir build/native --output-on-failure
       - run: python3 verification/onfoot_haptics_verify.py
       - run: python3 verification/openxr_native_verify.py
+      - run: python3 verification/package_preview.py
       - run: cmake -S vr -B build/vr-linux -G Ninja -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build/vr-linux --parallel 2
       - run: ctest --test-dir build/vr-linux --output-on-failure

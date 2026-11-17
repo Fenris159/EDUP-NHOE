@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(edup_nhoe VERSION 0.10.1 LANGUAGES C CXX)
+project(edup_nhoe VERSION 0.11.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -62,6 +62,8 @@ target_link_libraries(authored_motion_output PUBLIC minhook)
 add_library(gameinput_compat STATIC src/gameinput_compat.cpp src/gameinput_compat_hid.cpp)
 trace_settings(gameinput_compat)
 target_link_libraries(gameinput_compat PUBLIC minhook bcrypt)
+add_library(gameinput_native_compat STATIC src/gameinput_native_compat.cpp)
+trace_settings(gameinput_native_compat)
 
 set(RESTORATION_HOST_SOURCES src/dinput_proxy.cpp src/restoration_runtime.cpp src/xinput_output.cpp
   src/gameinput_output.cpp src/natural_probe.cpp src/motor_headroom.cpp src/motor_ownership.cpp
@@ -89,6 +91,17 @@ add_dependencies(dinput_restoration_chain_proxy previous_dinput_import)
 target_compile_definitions(dinput_restoration_chain_proxy PRIVATE ED_DINPUT_EARLY_CHAIN=1)
 target_link_libraries(dinput_restoration_chain_proxy PRIVATE "${PREVIOUS_DINPUT_IMPORT}")
 
+# CrossOver keeps the same gain, patterns, ownership and focus policy, while
+# routing through game-side slots instead of detouring native Wine libraries.
+add_library(dinput_crossover_proxy SHARED ${RESTORATION_HOST_SOURCES} src/output_slot_router.cpp)
+trace_settings(dinput_crossover_proxy)
+target_compile_definitions(dinput_crossover_proxy PRIVATE ED_CROSSOVER_COMPAT=1)
+target_link_libraries(dinput_crossover_proxy PRIVATE bcrypt minhook authored_motion_output gameinput_native_compat)
+target_link_options(dinput_crossover_proxy PRIVATE -Wl,--exclude-all-symbols)
+set_target_properties(dinput_crossover_proxy PROPERTIES PREFIX "" OUTPUT_NAME dinput8
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/crossover-dinput8"
+  ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/crossover-dinput8")
+
 if(BUILD_TESTING)
   add_library(dinput_verification_proxy SHARED ${RESTORATION_HOST_SOURCES})
   runtime_target(dinput_verification_proxy verification/dinput)
@@ -113,4 +126,10 @@ if(BUILD_TESTING)
   trace_settings(gameinput_adapter_verification)
   target_link_libraries(gameinput_adapter_verification PRIVATE gameinput_compat)
   target_link_options(gameinput_adapter_verification PRIVATE -municode)
+  add_executable(crossover_output_verification verification/xinput_output.cpp src/xinput_output.cpp
+    src/output_slot_router.cpp src/gameinput_output.cpp src/motor_ownership.cpp src/onfoot_haptics.cpp src/onfoot_runtime.cpp)
+  trace_settings(crossover_output_verification)
+  target_compile_definitions(crossover_output_verification PRIVATE ED_CROSSOVER_COMPAT=1)
+  target_link_libraries(crossover_output_verification PRIVATE authored_motion_output gameinput_native_compat)
+  target_link_options(crossover_output_verification PRIVATE -municode)
 endif()

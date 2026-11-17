@@ -15,8 +15,11 @@ struct XInputOutputStats {
   DWORD runtime_last_result;
 };
 // Private to the DLL/helper. The caller verifies the full executable and that
-// import and dynamic lookups resolve this same output address before install.
-DWORD XInputOutputStart(MotorBackend target, std::uintptr_t image, std::size_t image_size, bool verified) noexcept;
+// import and dynamic lookups match their expected output addresses. CrossOver
+// may use distinct interop thunks; that profile binds only the game-side slots.
+DWORD XInputOutputStart(MotorBackend target, std::uintptr_t image, std::size_t image_size, bool verified,
+                       MotorBackend dynamic_target = nullptr) noexcept;
+bool XInputOutputRefresh() noexcept;
 // gain_enabled includes the chosen haptic route's focus. Gamepad focus is
 // separate: a focused VR session must not enable background XInput fallback.
 void XInputOutputSetReady(bool gain_enabled, bool controller_connected, bool gamepad_focused = true) noexcept;

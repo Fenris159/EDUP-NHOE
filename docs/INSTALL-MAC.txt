@@ -1,0 +1,95 @@
+EDUP - NHOE 0.11.0 PREVIEW - MAC / CROSSOVER DRAG-AND-DROP
+
+This is a gamepad-only compatibility preview for an already working Windows
+Elite Dangerous installation in CrossOver. Physical Mac output has not yet
+been tested. These are Windows x64 DLLs run by CrossOver, not native Mac apps.
+
+INSTALL
+1. Close Elite and the Frontier launcher. Select its bottle in CrossOver and
+   use Open C: Drive to find the folder containing EliteDangerous64.exe,
+   normally Products/elite-dangerous-odyssey-64. Use the GAME folder, not the
+   launcher folder. Make a backup of any matching files before copying.
+2. Copy the CONTENTS of Copy-to-game beside EliteDangerous64.exe. There are
+   five files. Keep your existing ed-onfoot-haptics.ini when upgrading.
+   If an unrelated or chained dinput8.dll is installed, stop and resolve that
+   conflict first. This minimal package does not provide a chain proxy.
+3. In that SAME bottle, open Wine Configuration (under Control Panels), then
+   Libraries. Add dinput8, select Edit and choose Native then Builtin. Save.
+   If dinput8 already has an override, record its old value before changing it.
+   This one-time override tells CrossOver to load the copied proxy.
+4. Connect your controller as usual and launch Elite normally. Keep your
+   working Steam Input, controller and graphics settings. Do not run either
+   GameInput file yourself. No installer, script, service or driver is needed.
+
+The package does not need d3d11.dll, DXMT, DXVK or ED-UP to be changed.
+Leave Wine's XInput libraries in use; no XInput override is required here.
+You do not need the Linux ZIP or its launch wrapper.
+
+WHAT IT DOES
+The proxy restores the same original authored Motion gain and includes the
+same Odyssey/Scorpion additions as the Windows and Linux previews. Walking
+contacts are disabled; running/sprinting remain enabled where mapped. Surface
+coverage, jump/landing coverage and the inferred gait boundary need feedback.
+
+GameInput is selected automatically when its native device and rumble support
+are usable. Otherwise XInput supplies the two main motors. Separate trigger
+motors require real support in the controller AND CrossOver/macOS transport.
+Bundling the Microsoft redistributable does not add missing Mac drivers or
+guarantee four-motor output. No Linux HID/xpadneo bridge is used in this build.
+The proxy handles haptics only and leaves gamepad detection and controls alone.
+
+This package omits VR adapters, OpenXR registration, Linux binaries and chain
+variants. ed-vr-haptics.ini records VR as disabled; this DLL has no VR adapter.
+Use the Windows/Linux packages for their documented VR output routes.
+
+SETTINGS
+ed-onfoot-haptics.ini starts with:
+  [OnFoot]
+  Enabled=1
+  Strength=60
+  [Controller]
+  Output=auto
+Set [OnFoot] Enabled=0 for authored effects only; Strength accepts 0 to 100.
+If auto selects GameInput but you get no vibration, change Output=auto to
+Output=xinput under [Controller], then fully restart Elite. This selects the
+two-motor fallback without changing input controls. Restore auto and restart
+to try native GameInput again. Keep your existing settings when upgrading.
+
+IF THERE IS NO VIBRATION
+- Confirm Elite works normally in this bottle and the five files are beside
+  EliteDangerous64.exe. Confirm the dinput8 override is Native then Builtin.
+- Try the Output=xinput setting above. A USB connection may help diagnose
+  transport differences; neither USB nor Bluetooth guarantees trigger output.
+- Check restoration-status.json in the bottle's Windows temporary folder:
+    %TEMP%\EDRumbleRestoration\<session>\restoration-status.json
+  The newest session should show platform_profile="macos-crossover" and
+  output_routing="game-slots". No new session usually means the DLL did not
+  load; compare the session time with your launch. profile_match=0 means the
+  executable version is unsupported. output_hook_error=21 means the audio
+  binding is not ready yet; allow the game to finish loading.
+- Include that status file, Mac model/CPU, macOS and CrossOver versions,
+  bottle engine (Rosetta or ARM64EC/FEX), controller/connection, Steam Input
+  state and tested action when reporting a problem. Do not share login logs.
+
+This build avoids rewriting CrossOver's system XInput code. Game-side hooks
+still require working x64 code translation. ARM64EC/FEX bottles are
+experimental; a working Rosetta bottle is a useful comparison if available.
+Synthetic Windows tests passed; they do not establish physical Mac vibration.
+
+SUPPORTED GAME
+EliteDangerous64.exe version: 2026.10.23.334925
+Required SHA-256:
+ed5a8f8cd10f9a80d3bda5badd7ba1d4fcfc15996c8c7e018852cb170e264b63
+Unsupported executables remain unmodified and restoration stays disabled.
+
+UNINSTALL
+Close Elite and the launcher. Remove the five supplied files, except any
+pre-existing configuration you kept. Restore your backed-up files and the
+previous dinput8 override (or remove the new override if none existed).
+manifest.json lists supplied files and hashes; it is not copied into the game.
+
+REFERENCE
+CodeWeavers DLL override instructions:
+https://support.codeweavers.com/en_US/troubleshooting/troubleshooting-unlisted-applications-cxmac
+CodeWeavers controller/transport guidance:
+https://support.codeweavers.com/using-controllers-in-crossover?kb_language=en_US

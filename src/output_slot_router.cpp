@@ -1,0 +1,96 @@
+#include "edtrace/output_slot_router.hpp"
+#include <atomic>
+#include <cstring>
+#include <limits>
+
+namespace edtrace { namespace {
+SRWLOCK lifecycle = SRWLOCK_INIT;
+std::uintptr_t import_slot = 0, wwise_slot = 0;
+MotorBackend native_import = nullptr, native_dynamic = nullptr, replacement = nullptr;
+std::atomic<bool> active{false}, available{false};
+std::atomic<DWORD> failure{ERROR_NOT_READY};
+bool faulted = false;
+
+bool Read(std::uintptr_t slot, MotorBackend& value) noexcept {
+  SIZE_T copied = 0;
+  return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(slot), &value, sizeof(value), &copied) && copied == sizeof(value);
+}
+void* Bits(MotorBackend function) noexcept {
+  void* value = nullptr; static_assert(sizeof(value) == sizeof(function));
+  std::memcpy(&value, &function, sizeof(value)); return value;
+}
+DWORD Exchange(std::uintptr_t slot, MotorBackend expected, MotorBackend value) noexcept {
+  DWORD old = 0;
+  if (!VirtualProtect(reinterpret_cast<void*>(slot), sizeof(void*), PAGE_READWRITE, &old)) return GetLastError();
+  const auto observed = InterlockedCompareExchangePointer(reinterpret_cast<void* volatile*>(slot), Bits(value), Bits(expected));
+  DWORD ignored = 0;
+  if (!VirtualProtect(reinterpret_cast<void*>(slot), sizeof(void*), old, &ignored)) {
+    const DWORD error = GetLastError();
+    if (observed == Bits(expected))
+      InterlockedCompareExchangePointer(reinterpret_cast<void* volatile*>(slot), Bits(expected), Bits(value));
+    return error ? error : ERROR_ACCESS_DENIED;
+  }
+  return observed == Bits(expected) ? ERROR_SUCCESS : ERROR_ALREADY_EXISTS;
+}
+bool Refresh() noexcept {
+  available.store(false, std::memory_order_release);
+  if (!active.load(std::memory_order_acquire) || faulted) return false;
+  MotorBackend imported = nullptr, dynamic = nullptr;
+  if (!Read(import_slot, imported) || !Read(wwise_slot, dynamic)) {
+    faulted = true; failure.store(ERROR_NOACCESS); return false;
+  }
+  if (imported != replacement) {
+    faulted = true; failure.store(ERROR_ALREADY_EXISTS); return false;
+  }
+  // The audio runtime owns clearing/reinitializing its binding. A null slot
+  // is a quiet wait, while a foreign writer is never reclaimed.
+  if (!dynamic) { failure.store(ERROR_NOT_READY); return false; }
+  if (dynamic != replacement) {
+    if (dynamic != native_dynamic) {
+      faulted = true; failure.store(ERROR_ALREADY_EXISTS); return false;
+    }
+    const DWORD error = Exchange(wwise_slot, native_dynamic, replacement);
+    if (error) { faulted = true; failure.store(error); return false; }
+  }
+  available.store(true, std::memory_order_release); failure.store(ERROR_SUCCESS); return true;
+}
+}}
+
+namespace edtrace {
+DWORD OutputSlotsStart(std::uintptr_t image, std::size_t size, bool verified,
+                       MotorBackend imported, MotorBackend dynamic, MotorBackend wrapper) noexcept {
+  const DWORD incoming = GetLastError();
+  if (!verified || !image || image % alignof(void*) || !imported || !dynamic || !wrapper || imported == wrapper || dynamic == wrapper ||
+      size < kMotorWwiseSlotRva + sizeof(void*) || image > std::numeric_limits<std::uintptr_t>::max() - size)
+    return ERROR_REVISION_MISMATCH;
+  AcquireSRWLockExclusive(&lifecycle);
+  if (active.load()) { ReleaseSRWLockExclusive(&lifecycle); SetLastError(incoming); return ERROR_ALREADY_INITIALIZED; }
+  MotorBackend current_import = nullptr, current_dynamic = nullptr;
+  const auto iat = image + kMotorImportSlotRva, audio = image + kMotorWwiseSlotRva;
+  DWORD error = ERROR_SUCCESS;
+  if (!Read(iat, current_import) || !Read(audio, current_dynamic)) error = ERROR_NOACCESS;
+  else if (current_import != imported || (current_dynamic && current_dynamic != dynamic)) error = ERROR_ALREADY_EXISTS;
+  if (!error) {
+    import_slot = iat; wwise_slot = audio; native_import = imported; native_dynamic = dynamic; replacement = wrapper;
+    error = Exchange(import_slot, native_import, replacement);
+    if (!error) {
+      active.store(true, std::memory_order_release);
+      Refresh();
+      if (faulted) {
+        error = failure.load();
+        Exchange(import_slot, replacement, native_import);
+        active.store(false, std::memory_order_release);
+      }
+    }
+  }
+  if (error) failure.store(error);
+  ReleaseSRWLockExclusive(&lifecycle); SetLastError(incoming); return error;
+}
+bool OutputSlotsRefresh() noexcept {
+  const DWORD incoming = GetLastError();
+  AcquireSRWLockExclusive(&lifecycle); const bool result = Refresh(); ReleaseSRWLockExclusive(&lifecycle);
+  SetLastError(incoming); return result;
+}
+bool OutputSlotsReady() noexcept { return available.load(std::memory_order_acquire); }
+DWORD OutputSlotsError() noexcept { return failure.load(std::memory_order_acquire); }
+}

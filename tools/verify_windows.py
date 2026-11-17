@@ -51,10 +51,13 @@ def main():
         backend = windows(build / "verification/backend/ed_rumble_real_xinput9_1_0.dll")
         for mode in ("verified", "unknown"):
             run("output_" + mode, build / "xinput_output_verification.exe", [backend, mode], result=True)
+            run("crossover_output_" + mode, build / "crossover_output_verification.exe", [backend, mode], result=True)
         run("dinput_controlled", build / "dinput_proxy_verification.exe",
             [windows(build / "verification/dinput/dinput8.dll"), "controlled"], result=True)
         run("dinput_system", build / "dinput_proxy_verification.exe",
             [windows(build / "restoration-dinput8/dinput8.dll"), "system"], result=True)
+        run("dinput_crossover", build / "dinput_proxy_verification.exe",
+            [windows(build / "crossover-dinput8/dinput8.dll"), "system"], result=True)
         chain = owned / "chain"
         chain.mkdir()
         shutil.copyfile(build / "restoration-dinput8-chain/dinput8.dll", chain / "dinput8.dll")
