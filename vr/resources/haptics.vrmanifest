@@ -1,0 +1,12 @@
+{
+  "source": "ED haptics",
+  "applications": [{
+    "app_key": "local.ed.haptics.output",
+    "launch_type": "binary",
+    "binary_path_windows": "../ed-vr-haptics.exe",
+    "binary_path_linux": "../ed-vr-haptics",
+    "action_manifest_path": "actions.json",
+    "is_dashboard_overlay": false,
+    "strings": {"en_us": {"name": "Elite haptic output", "description": "Vibration output only"}}
+  }]
+}

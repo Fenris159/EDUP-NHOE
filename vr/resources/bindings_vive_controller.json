@@ -1,0 +1,20 @@
+{
+  "controller_type": "vive_controller",
+  "description": "Output-only Elite haptics. No button, axis or pose bindings.",
+  "name": "Elite haptics output",
+  "bindings": {
+    "/actions/edhaptics": {
+      "haptics": [
+        {
+          "output": "/actions/edhaptics/out/left",
+          "path": "/user/hand/left/output/haptic"
+        },
+        {
+          "output": "/actions/edhaptics/out/right",
+          "path": "/user/hand/right/output/haptic"
+        }
+      ],
+      "sources": []
+    }
+  }
+}

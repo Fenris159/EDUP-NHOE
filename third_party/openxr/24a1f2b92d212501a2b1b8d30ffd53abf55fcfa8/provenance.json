@@ -1,0 +1,26 @@
+{
+  "repository": "https://github.com/KhronosGroup/OpenXR-SDK",
+  "commit": "24a1f2b92d212501a2b1b8d30ffd53abf55fcfa8",
+  "files": {
+    "include/openxr/openxr.h": {
+      "bytes": 712477,
+      "sha256": "183fce845edd297790082fd23b49f78f023be6438eb529ae59e2af5fbc6d8ee4"
+    },
+    "include/openxr/openxr_platform_defines.h": {
+      "bytes": 3912,
+      "sha256": "a458ba5777415f2de518fdcdcc87fcf8651ba0468c9f69a101378672aad80946"
+    },
+    "include/openxr/openxr_loader_negotiation.h": {
+      "bytes": 5008,
+      "sha256": "ebcca0946b4b738ebee41943b821abe4df518b3a37766e0ce6883bcefce65124"
+    },
+    "LICENSES/Apache-2.0.txt": {
+      "bytes": 10283,
+      "sha256": "d3910dee6fe9fe134856d76268fe82adb1ade1ecf51b3568b7da6b94894b88f3"
+    },
+    "LICENSES/MIT.txt": {
+      "bytes": 1108,
+      "sha256": "8f25018489d6fe0dec34a352314c38dc146247b7de65735790f4398a92afa84b"
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "source": "https://api.nuget.org/v3-flatcontainer/microsoft.gameinput/4.0.306/microsoft.gameinput.4.0.306.nupkg",
+  "sha256": "b7facb296fd0eaed20b3d60dca5345a5fcfa674398b34d6f0dbc2793d502e3c1",
+  "version": "4.0.306",
+  "extracted_files": [
+    "LICENSE.txt",
+    "native/bin/x64/GameInputRawInputProxy.exe",
+    "native/bin/x64/GameInputRedist.dll",
+    "native/include/GameInput.h",
+    "native/include/v0/GameInput.h",
+    "native/include/v1/GameInput.h",
+    "native/include/v2/GameInput.h",
+    "native/include/v3/GameInput.h",
+    "native/include/v4/GameInput.h",
+    "native/src/GameInput.cpp"
+  ]
+}

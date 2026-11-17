@@ -1,0 +1,15 @@
+LIBRARY ed_meta_fixture
+EXPORTS
+  MockMetaReset
+  MockMetaRead
+  MockMetaFocus
+  MockMetaStatusResult
+  MockMetaWriteResult
+  ovr_Create
+  ovr_Destroy
+  ovr_Shutdown
+  ovr_EndFrame
+  ovr_GetSessionStatus
+  ovr_SetControllerVibration
+  ovr_GetInputState
+  ovr_GetTrackingState

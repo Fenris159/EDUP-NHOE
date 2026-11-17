@@ -1,0 +1,73 @@
+EDUP - NHOE 0.10.1 PREVIEW - LINUX / PROTON DRAG-AND-DROP
+
+INSTALL
+1. Close Elite and the Frontier launcher. Find the folder containing
+   EliteDangerous64.exe, normally Products/elite-dangerous-odyssey-64.
+2. Back up any existing files with the same names before copying. Copy the
+   CONTENTS of Copy-to-game into that folder. Keep the ed-vr-haptics subfolder
+   intact. Keep your existing ed-onfoot-haptics.ini if you have one.
+3. In that game folder, run:
+     chmod +x ed-vr-haptics/ed-vr-haptics
+4. Save your existing Steam Launch Options. If they are empty, use this line,
+   replacing /absolute/path/to/game with the folder containing the EXE:
+     WINEDLLOVERRIDES="dinput8=n,b" bash "/absolute/path/to/game/ed-vr-haptics/launch-with-vr.sh" %command%
+   If options already exist, preserve them: add dinput8=n,b to any existing
+   WINEDLLOVERRIDES list and put the bash wrapper immediately before %command%.
+   Do not duplicate or discard other DLL overrides or command arguments.
+5. Connect your headset and launch Elite normally through SteamVR. The wrapper
+   automatically starts the native haptic companion and stops its own child
+   afterward. You do not launch or configure the companion manually.
+
+EXISTING PROXY
+The default dinput8.dll is for a clean install without another DirectInput mod.
+If upgrading OUR existing chain installation, use Existing-chain/dinput8.dll
+instead of Copy-to-game/dinput8.dll. Keep ed_rumble_dinput8_previous.dll and
+elite_dinput8.dll. The chain DLL requires that preserved bootstrap dependency.
+Do not overwrite an unrelated dinput8.dll: this package does not merge mods.
+Back up the previous proxy and restore it when uninstalling.
+
+OPENXR
+Runtime/controller detection is automatic after the output adapter is loaded.
+OpenXR layer discovery still needs a one-time registration; see below.
+The native Linux layer and Windows-loader layer are both included because
+Proton frontends can use either route. The native SteamVR companion does not
+need OpenXR registration. No native Meta/Oculus runtime is supplied on Linux.
+
+FILES
+Copy-to-game contains the Windows game-side proxy and GameInput runtime,
+Linux VR binaries, two OpenXR layers and the support resources. Windows
+SteamVR companion binaries are omitted. Keep the resources folder intact.
+There is no installer, Steam configuration editor, driver installer or
+diagnostic recorder. Bash is used only to start/stop the native companion.
+
+TRIGGER ROUTING
+Both OpenXR layers send trigger channels separately when the game's existing
+negotiated Touch Pro profile and output bindings expose them. Each unavailable
+trigger falls back into its own hand. SteamVR/OpenVR uses hand-level blending.
+Thumb actuators are unused. Simple OpenXR vibration lets the runtime choose
+frequency. No button, axis, pose or trigger-pressure input is read.
+The OpenXR instance API version and enabled extension list are preserved.
+
+SETTINGS AND CONTROLLERS
+ed-onfoot-haptics.ini enables the added effects at 60% on a clean install.
+Set [OnFoot] Enabled=0 to use original authored effects only.
+Walking vibration is disabled. Running/sprinting contacts retain feedback
+when native humanoid-speed metadata exceeds 2.0. This inferred gait boundary
+and surface coverage need gameplay feedback; unknown gait stays silent.
+VR output is initially scaled to 60%. Keep Steam Input and your controls
+configured normally. The VR bridge does not read buttons, axes or poses, or
+request input focus. Existing Linux gamepad HID permissions are unchanged;
+this package does not install the optional Elite 2 four-motor access rule.
+
+SUPPORTED GAME
+EliteDangerous64.exe SHA-256 must match:
+ed5a8f8cd10f9a80d3bda5badd7ba1d4fcfc15996c8c7e018852cb170e264b63
+Check from the EXE folder: sha256sum EliteDangerous64.exe
+This preview includes the verified 0.10 capability-aware OpenXR output layers.
+Physical VR output and end-to-end headset gameplay remain untested.
+
+UNINSTALL
+Close the game/launcher. Restore your original Steam Launch Options. If you
+registered OpenXR, remove only our registration as described below.
+Remove the files you copied and restore your backups. Keep pre-existing
+configuration and preserved bootstrap DLLs. manifest.json lists our hashes.

@@ -1,0 +1,23 @@
+name: Preview feedback
+description: Report controller or VR haptic behavior.
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+    validations:
+      required: true
+  - type: textarea
+    id: setup
+    attributes:
+      label: Platform and controller
+      description: OS, Proton version, controller model/connection, Steam Input state, and VR frontend/runtime if used.
+    validations:
+      required: true
+  - type: textarea
+    id: action
+    attributes:
+      label: Exact action and observed feedback
+      description: What did you do, what did you expect, what did you feel, and did the vibration stop?
+    validations:
+      required: true

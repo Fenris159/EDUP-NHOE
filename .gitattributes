@@ -1,0 +1,8 @@
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+*.dll binary
+*.exe binary
+*.lib binary
+*.so binary
+third_party/** -text linguist-vendored

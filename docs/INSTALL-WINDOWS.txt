@@ -1,0 +1,63 @@
+EDUP - NHOE 0.10.1 PREVIEW - WINDOWS DRAG-AND-DROP
+
+INSTALL
+1. Close Elite and the Frontier launcher. Find the folder containing
+   EliteDangerous64.exe, normally Products/elite-dangerous-odyssey-64.
+2. Back up any existing files with the same names before copying. Copy the
+   CONTENTS of Copy-to-game into that folder. Keep the ed-vr-haptics subfolder
+   intact. Keep your existing ed-onfoot-haptics.ini if you have one.
+3. Connect your headset normally and launch Elite in VR. The proxy starts
+   the SteamVR companion automatically, or uses the game's existing Meta
+   session. Do not start the companion or GameInput helper yourself.
+
+EXISTING PROXY
+The default dinput8.dll is for a clean install without another DirectInput mod.
+If upgrading OUR existing chain installation, use Existing-chain/dinput8.dll
+instead of Copy-to-game/dinput8.dll. Keep ed_rumble_dinput8_previous.dll and
+elite_dinput8.dll. The chain DLL requires that preserved bootstrap dependency.
+Do not overwrite an unrelated dinput8.dll: this package does not merge mods.
+Back up the previous proxy and restore it when uninstalling.
+
+OPENXR
+SteamVR/Meta detection needs no installer configuration on Windows.
+OpenXR is different: its loader must discover our layer before detection can
+run. Copying the layer DLL does not register it. If you use an OpenXR frontend,
+follow the one-time Windows registration section below. No runtime switching
+or controller binding edits are needed. It is not required for SteamVR/Meta.
+
+FILES
+Copy-to-game contains the proxy, Microsoft's two unmodified GameInput files,
+the added-effect settings and ONE support folder. Windows binaries only.
+Resources inside the support folder are the companion's vibration bindings;
+leave them together. Our Meta adapter is compiled into the proxy.
+No installer, Python or background service is needed for the Windows package.
+
+TRIGGER ROUTING
+OpenXR sends trigger channels separately when the game's existing negotiated
+Touch Pro profile and output bindings expose them. Each unavailable trigger
+falls back into its own hand. SteamVR/OpenVR and legacy Meta use hand-level
+blending. Thumb actuators are unused. Simple OpenXR vibration lets the runtime
+choose frequency. No button, axis, pose or trigger-pressure input is read.
+The OpenXR instance API version and enabled extension list are preserved.
+
+SETTINGS
+ed-onfoot-haptics.ini enables the added effects at 60% on a clean install.
+Set [OnFoot] Enabled=0 to use original authored effects only.
+Walking vibration is disabled. Running/sprinting contacts retain feedback
+when native humanoid-speed metadata exceeds 2.0. This inferred gait boundary
+and surface coverage need gameplay feedback; unknown gait stays silent.
+VR output is initially scaled to 60%. Existing controls remain in use:
+the bridge does not read buttons, axes or poses, or request input focus.
+
+SUPPORTED GAME
+EliteDangerous64.exe SHA-256 must match:
+ed5a8f8cd10f9a80d3bda5badd7ba1d4fcfc15996c8c7e018852cb170e264b63
+Check with PowerShell: (Get-FileHash .\EliteDangerous64.exe).Hash
+This preview includes the verified 0.10 capability-aware OpenXR output layer.
+Physical VR output and end-to-end headset gameplay remain untested.
+
+UNINSTALL
+Close the game/launcher. If you registered OpenXR, remove only our registration
+as described below. Remove the files you copied and restore your
+backups. Keep pre-existing configuration and preserved bootstrap DLLs.
+manifest.json lists the supplied file hashes for identifying our files.

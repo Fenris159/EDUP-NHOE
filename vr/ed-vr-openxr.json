@@ -1,0 +1,14 @@
+{
+  "file_format_version": "1.0.0",
+  "api_layer": {
+    "name": "XR_APILAYER_ED_haptics",
+    "library_path": "./ed-vr-openxr.dll",
+    "api_version": "1.0",
+    "implementation_version": "1",
+    "description": "Elite Dangerous output-only haptics bridge",
+    "disable_environment": "ED_VR_HAPTICS_DISABLE",
+    "functions": {
+      "xrNegotiateLoaderApiLayerInterface": "xrNegotiateLoaderApiLayerInterface"
+    }
+  }
+}

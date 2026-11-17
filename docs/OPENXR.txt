@@ -1,0 +1,72 @@
+OPTIONAL OPENXR LAYER REGISTRATION
+
+Only needed for an OpenXR frontend. SteamVR haptics and native Windows
+Meta/Oculus haptics do not need these registrations. Detecting a runtime and
+making our layer discoverable to its loader are separate operations.
+
+This drag-and-drop package does not edit registry, Steam or XDG settings.
+The commands below are manual one-time registration, not a full installer.
+They do not select a VR runtime or change any controller input bindings.
+
+WINDOWS
+After copying the files, close Elite and open 64-bit PowerShell in the folder
+containing EliteDangerous64.exe. Run these lines (no administrator rights):
+
+  $layer = (Resolve-Path -LiteralPath '.\ed-vr-haptics\ed-vr-openxr.json').Path
+  $key = 'HKCU:\Software\Khronos\OpenXR\1\ApiLayers\Implicit'
+  if (!(Test-Path -LiteralPath $key)) { New-Item -Path $key | Out-Null }
+  New-ItemProperty -LiteralPath $key -Name $layer -PropertyType DWord -Value 0 -Force | Out-Null
+
+The named value should be absent before first registration. If it already
+exists, record its current value/type before changing it; preserve that value
+when undoing registration. Other named values must remain unchanged.
+Launch Elite normally afterward.
+
+To undo a value you created, close Elite and run in the same folder:
+  $layer = (Resolve-Path -LiteralPath '.\ed-vr-haptics\ed-vr-openxr.json').Path
+  Remove-ItemProperty -LiteralPath 'HKCU:\Software\Khronos\OpenXR\1\ApiLayers\Implicit' -Name $layer
+If the value existed before setup, restore it instead of deleting it.
+
+LINUX - NATIVE OPENXR LOADER
+After copying the files, close Elite. In the folder containing the EXE, run
+this block with Python 3. It creates only our named XDG discovery manifest;
+it refuses to overwrite an existing one. No Steam or Proton registry edits:
+
+python3 - <<'PY'
+import json, os
+from pathlib import Path
+game = Path.cwd().resolve()
+library = game / 'ed-vr-haptics/libed-vr-openxr.so'
+assert (game / 'EliteDangerous64.exe').is_file() and library.is_file(), 'Run in the installed game EXE folder'
+layer = json.loads((game / 'ed-vr-haptics/ed-vr-openxr.json').read_text())
+layer['api_layer']['library_path'] = str(library)
+selected = os.environ.get('XDG_DATA_HOME', '')
+root = Path(selected) if selected and Path(selected).is_absolute() else Path.home() / '.local/share'
+target = root / 'openxr/1/api_layers/implicit.d/ed-vr-haptics.json'
+target.parent.mkdir(parents=True, exist_ok=True)
+with target.open('x') as stream:
+    stream.write(json.dumps(layer, indent=2) + '\n')
+print('Created:', target)
+PY
+
+If this reports an existing manifest, inspect/retain that existing registration
+instead of blindly replacing it. To undo registration, remove only the named
+manifest created by this block, provided it still points to your installed
+ed-vr-haptics/libed-vr-openxr.so. Other OpenXR layers remain in place.
+
+LINUX - WINDOWS OPENXR LOADER INSIDE PROTON
+This is a separate loader route. Its registry lives in Elite's 359320 Proton
+prefix, not the Linux host registry. Through that prefix's registry editor,
+add the same Windows HKCU value described above, using the Windows path to
+ed-vr-haptics/ed-vr-openxr.json. For example, Wine's Z: mapping represents
+/path/to/game as Z:\path\to\game. Value type is REG_DWORD and value is zero.
+Do not use a different/system Wine runtime to edit an active Proton prefix.
+Record any pre-existing value and restore it when undoing registration.
+This manual package does not configure that prefix for you. The native and
+Windows layers arbitrate automatically when both are loaded; only one emits.
+
+LIMITS
+A frontend bypassing API-layer discovery cannot load our layer. The game must
+also provide a usable existing OpenXR action attach/sync path. Otherwise the
+adapter stays inactive rather than taking over the game's input setup.
+Actual headset/frontend/Proton delivery remains untested.

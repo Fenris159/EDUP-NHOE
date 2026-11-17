@@ -1,0 +1,38 @@
+name: Build and synthetic checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: cmake -S . -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build/native --parallel 2
+      - run: ctest --test-dir build/native --output-on-failure
+      - run: python3 verification/onfoot_haptics_verify.py
+      - run: python3 verification/openxr_native_verify.py
+      - run: cmake -S vr -B build/vr-linux -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build/vr-linux --parallel 2
+      - run: ctest --test-dir build/vr-linux --output-on-failure
+  windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install cross compiler and isolated fixture runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-mingw-w64-x86-64-posix wine xvfb xauth
+          sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
+          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
+      - run: cmake -S . -B build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=cmake/mingw64.cmake
+      - run: cmake --build build/windows --parallel 2
+      - run: cmake -S vr -B build/vr-windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/mingw64.cmake"
+      - name: Build Windows VR outputs and owned fixtures
+        run: >-
+          cmake --build build/vr-windows --parallel 2 --target
+          ed_vr_haptics dinput_vr_proxy dinput_vr_chain_proxy ed_vr_openxr
+          vr_mirror_verification vr_publisher_verification vr_broker_verification
+      - run: xvfb-run -a python3 tools/verify_windows.py --build build/windows --vr-build build/vr-windows

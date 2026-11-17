@@ -1,0 +1,7 @@
+LIBRARY ed_rumble_dinput8_previous.dll
+EXPORTS
+    EdPreviousDirectInput8Create @1 NONAME
+    EdPreviousDllCanUnloadNow @2 NONAME
+    EdPreviousDllGetClassObject @3 NONAME
+    EdPreviousDllRegisterServer @4 NONAME
+    EdPreviousDllUnregisterServer @5 NONAME

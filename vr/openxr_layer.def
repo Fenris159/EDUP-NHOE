@@ -1,0 +1,4 @@
+LIBRARY ed-vr-openxr
+EXPORTS
+  xrNegotiateLoaderApiLayerInterface
+  EDOpenXRGetStatus
