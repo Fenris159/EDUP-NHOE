@@ -80,6 +80,7 @@ DWORD StartChannel() noexcept {
 }
 void SnapshotRoute() noexcept {
   stats.active=route.Active();stats.blocks_fallback=route.BlocksFallback();stats.generation=route.Generation();
+  stats.acquiring=route.Acquiring();
   blocked.store(stats.blocks_fallback,std::memory_order_release);
 }
 void PollLocked() noexcept {

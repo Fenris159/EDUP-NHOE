@@ -19,7 +19,9 @@ def expected_members(platform):
               "Copy-to-game/GameInputRawInputProxy.exe", "Copy-to-game/ed-onfoot-haptics.ini",
               "INSTALL.txt", "manifest.json", "notices/GameInput.txt", "notices/MinHook.txt"}
     if platform == "macos-crossover-x64":
-        return common | {"Copy-to-game/ed-vr-haptics.ini"}
+        return common | {"Copy-to-game/ed-vr-haptics.ini", "Copy-to-game/ed-macos-haptics.app/Contents/Info.plist",
+                         "Copy-to-game/ed-macos-haptics.app/Contents/MacOS/ed-macos-haptics",
+                         "Copy-to-game/ed-macos-haptics.app/Contents/_CodeSignature/CodeResources"}
     vr = {"Existing-chain/dinput8.dll", "notices/OpenVR.txt", "notices/OpenXR.txt"}
     vr |= {"Copy-to-game/ed-vr-haptics/" + name for name in (
         "ed-vr-openxr.dll", "ed-vr-openxr.json", "resources/actions.json",
@@ -76,7 +78,7 @@ def publish(assets, notes):
         raise ValueError("Push the reviewed commit to public main and its lightweight release tag first")
     pages = json.loads(command("gh", "api", f"repos/{REPOSITORY}/commits/{commit}/check-runs", "--paginate", "--slurp"))
     checks = [check for page in pages for check in page["check_runs"]]
-    for name in ("native", "windows"):
+    for name in ("native", "windows", "macos"):
         matches = [check for check in checks if check["name"] == name]
         if not matches or any(check["conclusion"] != "success" for check in matches):
             raise ValueError(f"Required CI check has not succeeded: {name}")

@@ -45,9 +45,10 @@ def main():
             runs.append({"name": name, "returncode": process.returncode})
             print("PASS", name, flush=True)
 
-        for name in ("natural_gain", "motor_ownership_policy", "vr_haptics", "onfoot_haptics", "openxr_output"):
+        for name in ("natural_gain", "motor_ownership_policy", "vr_haptics", "mac_haptics", "onfoot_haptics", "openxr_output"):
             run(name, build / (name + "_verification.exe"))
         run("gameinput_adapter", build / "gameinput_adapter_verification.exe", result=True)
+        run("mac_output_relay", build / "mac_output_verification.exe", result=True)
         backend = windows(build / "verification/backend/ed_rumble_real_xinput9_1_0.dll")
         for mode in ("verified", "unknown"):
             run("output_" + mode, build / "xinput_output_verification.exe", [backend, mode], result=True)

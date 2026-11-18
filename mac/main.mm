@@ -66,7 +66,7 @@ static std::uint64_t Now() {
   self.intensity=value;return YES;
 }
 -(void)close {
-  self.engine.stoppedHandler=nil;self.engine.resetHandler=nil;
+  self.engine.stoppedHandler=^(CHHapticEngineStoppedReason reason) { (void)reason; };self.engine.resetHandler=^{};
   [self.player stopAtTime:CHHapticTimeImmediate error:nil];
   [self.engine stopWithCompletionHandler:nil];self.player=nil;self.engine=nil;self.healthy=NO;
 }
@@ -118,7 +118,7 @@ static std::uint64_t Now() {
   for(unsigned i=0;i<4;++i) if([candidate.haptics.supportedLocalities containsObject:localities[i]]) mask|=1u<<i;
   self.mask=mask;
   if(candidate==self.controller&&mb::Eligible(self.count,xbox,mask,[self ready])) return;
-  [self close:now];self.controller=candidate;self.label=candidate.vendorName?:@"";
+  [self close:now];self.controller=candidate;NSString* name=candidate.vendorName;self.label=name?name:@"";
   if(self.label.length>128) self.label=[self.label substringToIndex:128];
   self.status=!self.count?1:self.count!=1?2:!xbox?3:mask!=15?4:5;
   if(!mb::Eligible(self.count,xbox,mask,true)) return;
@@ -167,7 +167,7 @@ static void Status(NSString* path,EDDevice* device,bool active,std::uint64_t fra
   if(!path.length) return;
   NSDictionary* object=@{@"schema":@1,@"backend":@"macos-corehaptics",@"controllers":@(device.count),
     @"motor_mask":@(device.mask),@"ready":@([device ready]),@"active":@(active),@"status":@(device.status),
-    @"device_epoch":@(device.epoch),@"controller":device.label?:@"",@"engine_error":@(device.engineError),
+    @"device_epoch":@(device.epoch),@"controller":device.label?device.label:@"",@"engine_error":@(device.engineError),
     @"stopped_reason":@(device.stoppedReason),@"failed_actuator":@(device.failedActuator),@"frames":@(frames),@"physical_output_verified":@NO,
     @"selection_policy":@"sole-native-xbox",@"transport":@"not-queried",@"input_values_read":@NO};
   NSData* data=[NSJSONSerialization dataWithJSONObject:object options:NSJSONWritingPrettyPrinted error:nil];
@@ -212,14 +212,15 @@ int main(int argc,char** argv) {
     sockaddr_in address{};address.sin_family=AF_INET;address.sin_addr.s_addr=htonl(INADDR_LOOPBACK);address.sin_port=htons(static_cast<std::uint16_t>(port));
     if(connect(channel,reinterpret_cast<const sockaddr*>(&address),sizeof(address))||fcntl(channel,F_SETFL,O_NONBLOCK)==-1) { close(channel);return 70; }
     mb::Receiver receiver;std::uint64_t sequence=0,frames=0,lastServer=Now(),lastStatus=0;
-    unsigned epoch=0;bool active=false,done=false;
+    unsigned epoch=0;bool active=false,done=false,sentOnce=false;
     while(!done) {
       @autoreleasepool {
-        const auto now=Now();[device refresh:now];
+        [device refresh:Now()];auto now=Now();
         if(epoch!=device.epoch) { receiver.Cancel();epoch=device.epoch; }
         for(unsigned i=0;i<8;++i) {
           unsigned char bytes[mb::kPacketSize+1]{};const auto size=recv(channel,bytes,sizeof(bytes),0);if(size<0) break;
           mb::Message response{};
+          now=Now();
           if(!mb::Decode(bytes,static_cast<std::size_t>(size),response)||!receiver.Accept(response,token,now)) continue;
           lastServer=now;
           active=response.active&&[device ready]&&response.kind==mb::Kind::Frame;
@@ -227,13 +228,16 @@ int main(int argc,char** argv) {
           else [device zero:now];
           if(response.kind==mb::Kind::Stop) { done=true;break; }
         }
-        if(now-lastServer>=mb::kClientLeaseMs) { [device zero:now];active=false; }
-        if(now-lastServer>=2000) done=true;
+        now=Now();
+        if(sentOnce&&now-lastServer>=mb::kClientLeaseMs) { [device zero:now];active=false; }
+        if(sentOnce&&now-lastServer>=2000) done=true;
         if(!done&&!receiver.Pending(now)) {
           mb::Message poll{};poll.token=token;poll.sequence=++sequence;poll.generation=receiver.Generation();
           poll.active=[device ready];poll.zeroed=[device quiet:now];poll.controllers=device.count;poll.motors=device.mask;poll.error=device.status;poll.device_epoch=device.epoch;
           const auto packet=mb::Encode(poll);
-          if(send(channel,packet.data(),packet.size(),0)==static_cast<ssize_t>(packet.size())) receiver.Begin(sequence,now);
+          if(send(channel,packet.data(),packet.size(),0)==static_cast<ssize_t>(packet.size())) {
+            const auto sent=Now();receiver.Begin(sequence,sent);if(!sentOnce) lastServer=sent;sentOnce=true;
+          } else if(!sentOnce&&now-lastServer>=2000) done=true;
         }
         if(now-lastStatus>=1000||done) { Status(statusPath,device,active,frames);lastStatus=now; }
         [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.02]];

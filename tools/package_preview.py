@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import plistlib
 from pathlib import Path, PurePosixPath
 import re
 import stat
@@ -10,7 +11,7 @@ import struct
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.11.0-preview.1"
+VERSION = "0.12.0-preview.1"
 PLATFORMS = ("windows-x64", "linux-proton-x64", "macos-crossover-x64")
 GAME_SHA256 = "ed5a8f8cd10f9a80d3bda5badd7ba1d4fcfc15996c8c7e018852cb170e264b63"
 SDK = ROOT / "third_party/gameinput/4.0.306"
@@ -22,7 +23,22 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def collect(platform, windows, linux, gamepad):
+def universal_macho(data):
+    if len(data)<48 or data[:4]!=b"\xca\xfe\xba\xbe" or struct.unpack_from(">I",data,4)[0]!=2:
+        raise ValueError("Expected universal arm64/x86_64 Mac companion")
+    architectures=set()
+    for i in range(2):
+        cpu,_,offset,size,_=struct.unpack_from(">IIIII",data,8+i*20)
+        if offset<48 or size<32 or offset+size>len(data) or data[offset:offset+4]!=b"\xcf\xfa\xed\xfe":
+            raise ValueError("Invalid Mac companion slice")
+        if struct.unpack_from("<I",data,offset+4)[0]!=cpu or struct.unpack_from("<I",data,offset+12)[0]!=2:
+            raise ValueError("Expected executable Mac companion slice")
+        architectures.add(cpu)
+    if architectures!={0x01000007,0x0100000c}:
+        raise ValueError("Expected both arm64 and x86_64 Mac companion slices")
+
+
+def collect(platform, windows, linux, gamepad, native_mac):
     if platform not in PLATFORMS:
         raise ValueError(f"Unsupported platform: {platform}")
     files = {}
@@ -35,6 +51,13 @@ def collect(platform, windows, linux, gamepad):
     mac = platform == "macos-crossover-x64"
     if mac:
         add("Copy-to-game/dinput8.dll", gamepad / "crossover-dinput8/dinput8.dll")
+        app="ed-macos-haptics.app/Contents/"
+        for name in ("Info.plist","MacOS/ed-macos-haptics","_CodeSignature/CodeResources"):
+            add("Copy-to-game/"+app+name,native_mac/app/name)
+        universal_macho(files["Copy-to-game/"+app+"MacOS/ed-macos-haptics"])
+        info=plistlib.loads(files["Copy-to-game/"+app+"Info.plist"])
+        if info.get("CFBundleIdentifier")!="org.fenris159.edup-nhoe.haptics" or info.get("CFBundleExecutable")!="ed-macos-haptics":
+            raise ValueError("Unexpected native Mac app identity")
     else:
         add("Copy-to-game/dinput8.dll", windows / "experimental-proxy/dinput8.dll")
         add("Existing-chain/dinput8.dll", windows / "experimental-chain-proxy/dinput8.dll")
@@ -96,7 +119,7 @@ def collect(platform, windows, linux, gamepad):
     manifest = {"schema": 2, "profile": "edup-nhoe", "version": VERSION, "platform": platform,
                 "game_sha256": GAME_SHA256, "physical_vr_output_verified": False,
                 "gait_boundary_live_verified": False, "automatic_system_configuration": False,
-                "mac_physical_output_verified": False, "vr_included": not mac,
+                "mac_physical_output_verified": False, "mac_native_companion_included": mac, "vr_included": not mac,
                 "output_routing": "game-slots" if mac else "xinput-detour",
                 "linux_hid_compat_included": not mac,
                 "preserve_existing": ["ed-onfoot-haptics.ini", "ed-vr-haptics.ini"],
@@ -112,7 +135,7 @@ def write_package(platform, files, destination):
         for name, data in sorted(files.items()):
             info = zipfile.ZipInfo(name, (2026, 11, 17, 0, 0, 0))
             info.create_system = 3
-            executable = name.endswith(("/ed-vr-haptics", "/launch-with-vr.sh"))
+            executable = name.endswith(("/ed-vr-haptics", "/launch-with-vr.sh", "/MacOS/ed-macos-haptics"))
             info.external_attr = (stat.S_IFREG | (0o755 if executable else 0o644)) << 16
             info.compress_type = zipfile.ZIP_DEFLATED
             archive.writestr(info, data)
@@ -126,9 +149,9 @@ def write_package(platform, files, destination):
     return {"path": str(output), "sha256": checksum, "files": len(files)}
 
 
-def assemble_all(windows, linux, gamepad, destination):
+def assemble_all(windows, linux, gamepad, native_mac, destination):
     # Validate every platform before writing any release output.
-    contents = {platform: collect(platform, windows, linux, gamepad) for platform in PLATFORMS}
+    contents = {platform: collect(platform, windows, linux, gamepad, native_mac) for platform in PLATFORMS}
     return [write_package(platform, files, destination) for platform, files in contents.items()]
 
 
@@ -137,9 +160,10 @@ def main():
     parser.add_argument("--windows-build", type=Path, required=True)
     parser.add_argument("--linux-build", type=Path, required=True)
     parser.add_argument("--gamepad-build", type=Path, required=True, help="Root Windows build containing the CrossOver proxy")
+    parser.add_argument("--mac-build", type=Path, required=True, help="Native macOS build containing the signed universal app")
     parser.add_argument("--output", type=Path, default=ROOT / "dist")
     args = parser.parse_args()
-    packages = assemble_all(args.windows_build.resolve(), args.linux_build.resolve(), args.gamepad_build.resolve(), args.output.resolve())
+    packages = assemble_all(args.windows_build.resolve(), args.linux_build.resolve(), args.gamepad_build.resolve(), args.mac_build.resolve(), args.output.resolve())
     print(json.dumps(packages, indent=2))
 
 

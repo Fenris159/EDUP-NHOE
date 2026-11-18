@@ -9,6 +9,7 @@ namespace edtrace::macbridge {
 constexpr std::size_t kPacketSize = 80;
 constexpr std::uint64_t kPollDeadlineMs = 80, kClientLeaseMs = 160;
 constexpr std::uint64_t kSourceLeaseMs = 100, kFallbackFenceMs = 500;
+constexpr std::uint64_t kAcquireFenceMs = 500;
 constexpr double kPulseSeconds = .12;
 using Token = std::array<unsigned char,16>;
 using Packet = std::array<unsigned char,kPacketSize>;
@@ -80,7 +81,10 @@ inline bool Matches(const Message& message,const Token& token,std::uint64_t sequ
 class Route {
  public:
   void Observe(const Message& m,std::uint64_t now) noexcept {
-    if(seen_&&epoch_!=m.device_epoch&&active_) { active_=false;draining_=true;released_at_=now;++generation_; }
+    if(seen_&&epoch_!=m.device_epoch&&(active_||acquiring_)) {
+      if(active_) { draining_=true;released_at_=now; }
+      active_=false;acquiring_=false;++generation_;
+    }
     epoch_=m.device_epoch;
     seen_=true;seen_at_=now;candidate_=m.active&&m.controllers==1&&m.motors==15&&!m.error;
     if(!active_&&draining_&&m.zeroed&&m.generation==generation_) draining_=false;
@@ -88,19 +92,24 @@ class Route {
   bool Select(bool allowed,std::uint64_t now) noexcept {
     const bool fresh=seen_&&now>=seen_at_&&now-seen_at_<kClientLeaseMs;
     if(draining_&&now>=released_at_&&now-released_at_>=kFallbackFenceMs) draining_=false;
-    const bool wanted=allowed&&fresh&&candidate_&&!draining_;
-    if(active_!=wanted) {
+    const bool wanted=allowed&&fresh&&candidate_;
+    if(!wanted&&(active_||acquiring_)) {
       if(active_) { draining_=true;released_at_=now; }
-      active_=wanted;++generation_;
+      active_=false;acquiring_=false;++generation_;
     }
+    if(wanted&&!active_&&!draining_&&!acquiring_) { acquiring_=true;acquire_at_=now;++generation_; }
+    // Quiesce the previous GameInput/XInput provider before activating native
+    // engines. The asynchronous Microsoft provider has no stop acknowledgement.
+    if(acquiring_&&now>=acquire_at_&&now-acquire_at_>=kAcquireFenceMs) { acquiring_=false;active_=true;++generation_; }
     return active_;
   }
   bool Active() const noexcept { return active_; }
-  bool BlocksFallback() const noexcept { return active_||draining_; }
+  bool BlocksFallback() const noexcept { return active_||draining_||acquiring_; }
+  bool Acquiring() const noexcept { return acquiring_; }
   std::uint64_t Generation() const noexcept { return generation_; }
  private:
-  bool seen_=false,candidate_=false,active_=false,draining_=false;
-  std::uint64_t seen_at_=0,released_at_=0,generation_=1;
+  bool seen_=false,candidate_=false,active_=false,draining_=false,acquiring_=false;
+  std::uint64_t seen_at_=0,released_at_=0,generation_=1,acquire_at_=0;
   std::uint32_t epoch_=0;
 };
 class Receiver {

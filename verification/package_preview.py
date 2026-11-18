@@ -3,6 +3,7 @@
 import importlib.util
 import hashlib
 import json
+import plistlib
 from pathlib import Path
 import struct
 import sys
@@ -24,7 +25,7 @@ class PackageContract(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="nhoe-package-check-")
         self.addCleanup(self.temporary.cleanup)
         root = Path(self.temporary.name)
-        self.windows, self.linux, self.gamepad, self.output = (root / name for name in ("windows", "linux", "gamepad", "output"))
+        self.windows, self.linux, self.gamepad, self.native_mac, self.output = (root / name for name in ("windows", "linux", "gamepad", "mac", "output"))
         pe = bytearray(256)
         struct.pack_into("<I", pe, 0x3c, 128)
         pe[128:132] = b"PE\0\0"
@@ -41,9 +42,21 @@ class PackageContract(unittest.TestCase):
             path = build / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
+        app=self.native_mac / "ed-macos-haptics.app/Contents"
+        (app / "MacOS").mkdir(parents=True)
+        (app / "_CodeSignature").mkdir()
+        (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier":"org.fenris159.edup-nhoe.haptics","CFBundleExecutable":"ed-macos-haptics"}))
+        (app / "_CodeSignature/CodeResources").write_bytes(plistlib.dumps({"files2":{}}))
+        macho=bytearray(112)
+        struct.pack_into(">II",macho,0,0xcafebabe,2)
+        for i,cpu in enumerate((0x01000007,0x0100000c)):
+            offset=48+i*32
+            struct.pack_into(">IIIII",macho,8+i*20,cpu,0,offset,32,0)
+            struct.pack_into("<IIII",macho,offset,0xfeedfacf,cpu,0,2)
+        (app / "MacOS/ed-macos-haptics").write_bytes(macho)
 
     def assemble(self):
-        return package.assemble_all(self.windows, self.linux, self.gamepad, self.output)
+        return package.assemble_all(self.windows, self.linux, self.gamepad, self.native_mac, self.output)
 
     def test_all_platforms_with_minimal_mac_and_distinct_vr_payloads(self):
         results = self.assemble()
@@ -58,7 +71,9 @@ class PackageContract(unittest.TestCase):
         self.assertEqual(set(mac), {"Copy-to-game/dinput8.dll", "Copy-to-game/GameInputRedist.dll",
                          "Copy-to-game/GameInputRawInputProxy.exe", "Copy-to-game/ed-onfoot-haptics.ini",
                          "Copy-to-game/ed-vr-haptics.ini", "INSTALL.txt", "notices/GameInput.txt",
-                         "notices/MinHook.txt", "manifest.json"})
+                         "notices/MinHook.txt", "manifest.json", "Copy-to-game/ed-macos-haptics.app/Contents/Info.plist",
+                         "Copy-to-game/ed-macos-haptics.app/Contents/MacOS/ed-macos-haptics",
+                         "Copy-to-game/ed-macos-haptics.app/Contents/_CodeSignature/CodeResources"})
         self.assertEqual(mac["Copy-to-game/dinput8.dll"], (self.gamepad / "crossover-dinput8/dinput8.dll").read_bytes())
         self.assertEqual(mac["Copy-to-game/ed-vr-haptics.ini"], b"[VR]\r\nEnabled=0\r\n")
         self.assertIn(b"Output=auto", mac["Copy-to-game/ed-onfoot-haptics.ini"])
@@ -83,6 +98,13 @@ class PackageContract(unittest.TestCase):
         struct.pack_into("<H", data, 132, 0x14c)
         path.write_bytes(data)
         with self.assertRaisesRegex(ValueError, "Expected x64"):
+            self.assemble()
+        self.assertFalse(self.output.exists())
+
+    def test_non_universal_native_app_prevents_partial_release(self):
+        path=self.native_mac / "ed-macos-haptics.app/Contents/MacOS/ed-macos-haptics"
+        path.write_bytes(b"not a universal executable")
+        with self.assertRaisesRegex(ValueError,"Expected universal"):
             self.assemble()
         self.assertFalse(self.output.exists())
 

@@ -6,7 +6,7 @@
 namespace edtrace {
 struct MacOutputStats {
   DWORD error=ERROR_NOT_READY,launch_error=ERROR_NOT_READY,client_error=0;
-  bool listening=false,launched=false,active=false,blocks_fallback=false;
+  bool listening=false,launched=false,active=false,blocks_fallback=false,acquiring=false;
   unsigned controllers=0,motors=0,port=0;
   std::uint64_t polls=0,frames=0,generation=0;
 };

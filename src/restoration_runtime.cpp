@@ -117,7 +117,7 @@ void SaveStatus() noexcept {
     const auto s = RestorationGetStatus();
     const std::string text = std::string("{\"schema\":8,\"host\":\"dinput8\",\"output\":\"") +
 #ifdef ED_CROSSOVER_COMPAT
-      (MacOutputGetStats().active ? "macos-corehaptics" :
+      (MacOutputGetStats().active ? "macos-corehaptics" : MacOutputGetStats().blocks_fallback ? "macos-handoff" :
 #endif
       (s.gameinput_selected ? (s.gameinput_compat_ready ? "gameinput-compat-hid" : "gameinput") : "xinput")
 #ifdef ED_CROSSOVER_COMPAT
@@ -134,6 +134,7 @@ void SaveStatus() noexcept {
       ",\"macos_client_error\":" + std::to_string(MacOutputGetStats().client_error) +
       ",\"macos_native_active\":" + std::to_string(MacOutputGetStats().active) +
       ",\"macos_blocks_fallback\":" + std::to_string(MacOutputGetStats().blocks_fallback) +
+      ",\"macos_acquiring\":" + std::to_string(MacOutputGetStats().acquiring) +
       ",\"macos_controller_count\":" + std::to_string(MacOutputGetStats().controllers) +
       ",\"macos_motor_mask\":" + std::to_string(MacOutputGetStats().motors) +
 #else
