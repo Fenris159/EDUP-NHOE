@@ -1,4 +1,4 @@
-EDUP - NHOE 0.11.0 PREVIEW - LINUX / PROTON DRAG-AND-DROP
+EDUP - NHOE 0.12.0 PREVIEW - LINUX / PROTON DRAG-AND-DROP
 
 INSTALL
 1. Close Elite and the Frontier launcher. Find the folder containing

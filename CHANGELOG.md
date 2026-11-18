@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.0-preview.1
+
+- Add a universal arm64/x86_64 macOS GameController/Core Haptics companion with automatic launch and independent handle/trigger output.
+- Select native output conservatively for one native Xbox controller, one XInput gamepad and four usable actuator engines; preserve fallback for unavailable or ambiguous devices.
+- Add authenticated loopback transport, bounded pulses, source/peer expiry, controller-generation fencing and quiet provider handoffs.
+- Add a no-vibration capability check, native status reporting and a playback-failure backoff. Keep controller input and graphics configuration unchanged.
+- Require macOS CI, a signed universal native app and all three platform bundles before publication. New native four-motor delivery still needs physical testing.
+
 ## 0.11.0-preview.1
 
 - Add a minimal Mac/CrossOver gamepad package with five copyable files and one installation guide. Physical Mac output remains untested; ARM64EC/FEX is experimental.

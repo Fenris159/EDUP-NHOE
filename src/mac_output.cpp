@@ -40,7 +40,7 @@ std::wstring UnixName(const std::wstring& path) {
   if(size>1) { result.resize(static_cast<std::size_t>(size));MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,name,-1,result.data(),size);result.pop_back(); }
   HeapFree(GetProcessHeap(),0,name);return result;
 }
-DWORD Launch(const std::wstring& directory,const std::wstring& status_directory) {
+DWORD Launch(const std::wstring& directory,const std::wstring& status_directory,const std::wstring& opener=L"\\\\?\\unix/usr/bin/open") {
   const auto application=UnixName(directory+L"\\ed-macos-haptics.app");
   const auto output=UnixName(status_directory);
   if(application.empty()||output.empty()) return ERROR_FILE_NOT_FOUND;
@@ -48,7 +48,6 @@ DWORD Launch(const std::wstring& directory,const std::wstring& status_directory)
   std::wstring text;for(const auto b:token) { text+=hex[b>>4];text+=hex[b&15]; }
   // Wine's CreateProcess supports non-PE Unix executables. Use the absolute
   // system launcher directly; there is no shell, PATH search or activation.
-  const std::wstring opener=L"\\\\?\\unix/usr/bin/open";
   std::wstring command=Quote(opener)+L" -g -n -a "+Quote(application)+L" --args --port "+std::to_wstring(stats.port)+
     L" --token "+text+L" --status "+Quote(output+L"/macos-haptics-status.json");
   STARTUPINFOW startup{};startup.cb=sizeof(startup);PROCESS_INFORMATION process{};
@@ -160,6 +159,9 @@ void MacOutputStop() noexcept {
 DWORD MacOutputStartControlled(std::uint64_t (*clock)() noexcept) noexcept {
   if(!clock) return ERROR_INVALID_PARAMETER;
   AcquireSRWLockExclusive(&lock);clock_now=clock;token.fill(0x5a);stats.error=StartChannel();const auto result=stats.error;ReleaseSRWLockExclusive(&lock);return result;
+}
+DWORD MacOutputLaunchControlled(const std::wstring& opener,const std::wstring& directory) noexcept {
+  try { return Launch(directory,directory,opener); } catch(...) { return ERROR_NOT_ENOUGH_MEMORY; }
 }
 #endif
 } // namespace edtrace

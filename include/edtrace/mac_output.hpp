@@ -21,5 +21,6 @@ MacOutputStats MacOutputGetStats() noexcept;
 void MacOutputStop() noexcept;
 #ifdef ED_MAC_OUTPUT_FIXTURE
 DWORD MacOutputStartControlled(std::uint64_t (*clock)() noexcept) noexcept;
+DWORD MacOutputLaunchControlled(const std::wstring& opener,const std::wstring& directory) noexcept;
 #endif
 } // namespace edtrace

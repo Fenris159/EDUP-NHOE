@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 
 
 def windows(path):
@@ -49,6 +50,21 @@ def main():
             run(name, build / (name + "_verification.exe"))
         run("gameinput_adapter", build / "gameinput_adapter_verification.exe", result=True)
         run("mac_output_relay", build / "mac_output_verification.exe", result=True)
+        if prefix:
+            native = owned / "Mac user's $() `literal` 漢字"
+            native.mkdir()
+            (native / "ed-macos-haptics.app").mkdir()
+            opener = native / "owned-opener"
+            opener.write_text("#!/usr/bin/python3\nimport json,pathlib,sys\nargs=sys.argv[1:]\npathlib.Path(args[args.index('--status')+1]).write_text(json.dumps(args))\n")
+            opener.chmod(0o755)
+            run("mac_native_launch",build / "mac_output_verification.exe",["launch",windows(opener),windows(native)],result=True)
+            capture=native / "macos-haptics-status.json"
+            deadline=time.monotonic()+3
+            while not capture.exists() and time.monotonic()<deadline:
+                time.sleep(.01)
+            arguments=json.loads(capture.read_text())
+            if arguments[:4]!=["-g","-n","-a",str(native / "ed-macos-haptics.app")] or arguments[4:6]!=["--args","--port"] or not 0<int(arguments[6])<65536 or arguments[7:]!=["--token","5a"*16,"--status",str(capture)]:
+                raise RuntimeError("Native launcher arguments changed or lost literal path characters")
         backend = windows(build / "verification/backend/ed_rumble_real_xinput9_1_0.dll")
         for mode in ("verified", "unknown"):
             run("output_" + mode, build / "xinput_output_verification.exe", [backend, mode], result=True)

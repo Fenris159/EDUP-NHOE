@@ -80,6 +80,8 @@ static std::uint64_t Now() {
 @property(nonatomic) unsigned status;
 @property(nonatomic) unsigned epoch;
 @property(nonatomic) unsigned failedActuator;
+@property(nonatomic) unsigned playFailures;
+@property(nonatomic) BOOL disabled;
 @property(nonatomic) std::uint64_t nextDiscovery;
 @property(nonatomic) std::uint64_t uncertainUntil;
 @property(nonatomic,copy) NSString* label;
@@ -99,12 +101,12 @@ static std::uint64_t Now() {
   return self;
 }
 -(void)changed:(NSNotification*)notification {
-  self.nextDiscovery=0;
+  self.nextDiscovery=0;self.playFailures=0;self.disabled=NO;
   if([notification.name isEqualToString:GCControllerDidDisconnectNotification]&&notification.object==self.controller) [self close:Now()];
 }
 -(void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
 -(BOOL)ready {
-  if(self.status||self.motors.count!=4) return NO;
+  if(self.disabled||self.status||self.motors.count!=4) return NO;
   for(EDMotor* motor in self.motors) if(!motor.healthy) { self.status=5;self.engineError=motor.errorCode;self.stoppedReason=motor.stoppedReason;return NO; }
   return YES;
 }
@@ -117,6 +119,8 @@ static std::uint64_t Now() {
   unsigned mask=0;
   for(unsigned i=0;i<4;++i) if([candidate.haptics.supportedLocalities containsObject:localities[i]]) mask|=1u<<i;
   self.mask=mask;
+  if(candidate!=self.controller) { self.disabled=NO;self.playFailures=0; }
+  if(candidate==self.controller&&self.disabled) return;
   if(candidate==self.controller&&mb::Eligible(self.count,xbox,mask,[self ready])) return;
   [self close:now];self.controller=candidate;NSString* name=candidate.vendorName;self.label=name?name:@"";
   if(self.label.length>128) self.label=[self.label substringToIndex:128];
@@ -148,7 +152,10 @@ static std::uint64_t Now() {
   const BOOL success=mb::Apply(frame,(__bridge void*)self,[](void* context,unsigned index,float value) {
     EDDevice* device=(__bridge EDDevice*)context;return [device.motors[index] apply:value]!=NO;
   });
-  if(!success) { self.status=5;[self zero:now]; }
+  if(!success) {
+    self.status=5;[self zero:now];++self.playFailures;self.disabled=self.playFailures>=3;
+    self.nextDiscovery=now+10000;
+  }
   return success;
 }
 -(void)close:(std::uint64_t)now {
@@ -169,6 +176,7 @@ static void Status(NSString* path,EDDevice* device,bool active,std::uint64_t fra
     @"motor_mask":@(device.mask),@"ready":@([device ready]),@"active":@(active),@"status":@(device.status),
     @"device_epoch":@(device.epoch),@"controller":device.label?device.label:@"",@"engine_error":@(device.engineError),
     @"stopped_reason":@(device.stoppedReason),@"failed_actuator":@(device.failedActuator),@"frames":@(frames),@"physical_output_verified":@NO,
+    @"playback_failures":@(device.playFailures),@"native_disabled":@(device.disabled),
     @"selection_policy":@"sole-native-xbox",@"transport":@"not-queried",@"input_values_read":@NO};
   NSData* data=[NSJSONSerialization dataWithJSONObject:object options:NSJSONWritingPrettyPrinted error:nil];
   if(data) [data writeToFile:path options:NSDataWritingAtomic error:nil];
@@ -240,7 +248,7 @@ int main(int argc,char** argv) {
           } else if(!sentOnce&&now-lastServer>=2000) done=true;
         }
         if(now-lastStatus>=1000||done) { Status(statusPath,device,active,frames);lastStatus=now; }
-        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.02]];
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:[device ready]?.005:.02]];
       }
     }
     [device close:Now()];Status(statusPath,device,false,frames);close(channel);return 0;

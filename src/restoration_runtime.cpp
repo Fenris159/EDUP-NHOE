@@ -131,6 +131,9 @@ void SaveStatus() noexcept {
       ",\"platform_profile\":\"macos-crossover\",\"output_routing\":\"game-slots\"" +
       ",\"macos_bridge_error\":" + std::to_string(MacOutputGetStats().error) +
       ",\"macos_launch_error\":" + std::to_string(MacOutputGetStats().launch_error) +
+      ",\"macos_helper_launched\":" + std::to_string(MacOutputGetStats().launched) +
+      ",\"macos_helper_polls\":" + std::to_string(MacOutputGetStats().polls) +
+      ",\"macos_frames\":" + std::to_string(MacOutputGetStats().frames) +
       ",\"macos_client_error\":" + std::to_string(MacOutputGetStats().client_error) +
       ",\"macos_native_active\":" + std::to_string(MacOutputGetStats().active) +
       ",\"macos_blocks_fallback\":" + std::to_string(MacOutputGetStats().blocks_fallback) +

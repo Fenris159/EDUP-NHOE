@@ -1,6 +1,6 @@
 # Preview feedback
 
-Report the package version, operating system, Proton version if applicable, controller model, USB/Bluetooth/wireless connection, Steam Input state, and VR frontend/runtime if used. For Mac, include CPU, CrossOver version, bottle engine (Rosetta or ARM64EC/FEX), selected Controller Output mode and the newest restoration-status.json. Mac physical output remains untested; its package is gamepad only.
+Report the package version, operating system, Proton version if applicable, controller model, USB/Bluetooth/wireless connection, Steam Input state, and VR frontend/runtime if used. For Mac, include CPU, CrossOver version, bottle engine (Rosetta or ARM64EC/FEX), selected Controller Output mode, restoration-status.json and macos-haptics-status.json from the newest session. The native four-motor route needs physical testing; its package is gamepad only. Open the native app manually for a capability check that sends no vibration. Test each trigger separately while CrossOver has focus and check that fallback returns if the companion is unavailable. Multiple visible controllers deliberately prevent automatic native selection.
 
 Test one action at a time and report what you felt:
 

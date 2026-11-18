@@ -1,95 +1,118 @@
-EDUP - NHOE 0.11.0 PREVIEW - MAC / CROSSOVER DRAG-AND-DROP
+EDUP - NHOE 0.12.0 PREVIEW - MAC / CROSSOVER DRAG-AND-DROP
 
-This is a gamepad-only compatibility preview for an already working Windows
-Elite Dangerous installation in CrossOver. Physical Mac output has not yet
-been tested. These are Windows x64 DLLs run by CrossOver, not native Mac apps.
+The native four-motor companion requires macOS 11.3 or newer. Its universal
+binary supports Apple silicon and Intel. The previous Mac XInput route is
+user-confirmed; native four-motor output still needs physical testing.
 
 INSTALL
-1. Close Elite and the Frontier launcher. Select its bottle in CrossOver and
-   use Open C: Drive to find the folder containing EliteDangerous64.exe,
-   normally Products/elite-dangerous-odyssey-64. Use the GAME folder, not the
-   launcher folder. Make a backup of any matching files before copying.
-2. Copy the CONTENTS of Copy-to-game beside EliteDangerous64.exe. There are
-   five files. Keep your existing ed-onfoot-haptics.ini when upgrading.
-   If an unrelated or chained dinput8.dll is installed, stop and resolve that
-   conflict first. This minimal package does not provide a chain proxy.
-3. In that SAME bottle, open Wine Configuration (under Control Panels), then
-   Libraries. Add dinput8, select Edit and choose Native then Builtin. Save.
-   If dinput8 already has an override, record its old value before changing it.
-   This one-time override tells CrossOver to load the copied proxy.
-4. Connect your controller as usual and launch Elite normally. Keep your
-   working Steam Input, controller and graphics settings. Do not run either
-   GameInput file yourself. No installer, script, service or driver is needed.
+1. Close Elite and the Frontier launcher. In CrossOver, select Elite's bottle
+   and use Open C: Drive. Find the folder containing EliteDangerous64.exe,
+   normally Products/elite-dangerous-odyssey-64. Back up matching mod files.
+2. Copy the CONTENTS of Copy-to-game beside EliteDangerous64.exe: five loose
+   files and ed-macos-haptics.app. Keep the app intact. Retain your existing
+   ed-onfoot-haptics.ini. Stop first if an unrelated/chained dinput8.dll exists;
+   this package does not supply a chain variant or merge other mods.
+3. In the SAME bottle, open Wine Configuration (Control Panels), Libraries.
+   Add/select dinput8, click Edit, choose Native then Builtin, and save.
+   Record any previous override before changing it. An existing correct
+   override does not need to be changed again.
+4. Open ed-macos-haptics.app once in Finder. It shows a capability check and
+   sends NO vibration. The app is ad hoc signed, not Developer ID notarized.
+   If macOS blocks it, use System Settings > Privacy & Security > Open Anyway
+   when offered, then open it again. Do not disable Gatekeeper globally.
+   Close the capability check after reading it.
+5. Pair/connect your Xbox controller normally. Leave [Controller] Output=auto
+   in ed-onfoot-haptics.ini, then launch Elite normally. The companion starts
+   automatically in the background and exits after the game stops responding.
+   Do not manually run the GameInput files or configure a network address.
 
-The package does not need d3d11.dll, DXMT, DXVK or ED-UP to be changed.
-Leave Wine's XInput libraries in use; no XInput override is required here.
-You do not need the Linux ZIP or its launch wrapper.
+Keep your working Steam Input, controller bindings and graphics setup.
+No d3d11.dll, DXMT, DXVK or ED-UP changes are needed. Leave Wine's XInput
+libraries in use. No additional XInput override or Linux wrapper is needed.
+No Windows driver, Bluetooth scanner, input mapper or service is installed.
 
-WHAT IT DOES
-The proxy restores the same original authored Motion gain and includes the
-same Odyssey/Scorpion additions as the Windows and Linux previews. Walking
-contacts are disabled; running/sprinting remain enabled where mapped. Surface
-coverage, jump/landing coverage and the inferred gait boundary need feedback.
+NATIVE FOUR-MOTOR OUTPUT
+The native companion queries Apple's GameController framework. For automatic
+selection, it requires exactly one visible native controller with an Xbox
+profile, four advertised individual actuator locations, four working engines,
+and exactly one connected XInput gamepad in the game. This is a conservative
+selection policy, not proof of a native-to-Windows controller identity match.
+Multiple controllers or virtual duplicates keep native output unselected.
 
-GameInput is selected automatically when its native device and rumble support
-are usable. Otherwise XInput supplies the two main motors. Separate trigger
-motors require real support in the controller AND CrossOver/macOS transport.
-Bundling the Microsoft redistributable does not add missing Mac drivers or
-guarantee four-motor output. No Linux HID/xpadneo bridge is used in this build.
-The proxy handles haptics only and leaves gamepad detection and controls alone.
+Channels map separately: low-frequency body to left handle, high-frequency
+body to right handle, left trigger to left trigger, right trigger to right
+trigger. The companion uses Core Haptics; it does not route triggers through
+XInput or invent missing actuator capabilities. Bluetooth/USB support depends
+on what macOS exposes. A mask of 15 means all four locations were advertised;
+it does not by itself prove physical vibration.
 
-This package omits VR adapters, OpenXR registration, Linux binaries and chain
-variants. ed-vr-haptics.ini records VR as disabled; this DLL has no VR adapter.
-Use the Windows/Linux packages for their documented VR output routes.
+The bridge does not read buttons, axes, poses or trigger pressure, change
+bindings/player indices, or request controller input focus. Controller
+connection notifications and metadata are used only for output selection.
+It omits VR adapters, OpenXR registration and Linux HID/xpadneo code.
+
+FALLBACK AND SAFETY
+If native discovery, launch or playback fails, the existing GameInput/XInput
+fallback remains available. XInput supports the two main motors. Output=auto
+allows automatic native selection; Output=xinput skips BOTH native Mac output
+and GameInput. Change it and fully restart Elite to force the known fallback.
+
+There is a brief quiet interval during provider changes. Frames expire,
+requests are finite, and loss of the game heartbeat stops the companion.
+Repeated playback errors back off and eventually disable native attempts
+until a controller reconnect or game restart, preserving fallback usability.
+No per-session gameplay timer limits haptics.
 
 SETTINGS
-ed-onfoot-haptics.ini starts with:
+The supplied ed-onfoot-haptics.ini starts with:
   [OnFoot]
   Enabled=1
   Strength=60
   [Controller]
   Output=auto
 Set [OnFoot] Enabled=0 for authored effects only; Strength accepts 0 to 100.
-If auto selects GameInput but you get no vibration, change Output=auto to
-Output=xinput under [Controller], then fully restart Elite. This selects the
-two-motor fallback without changing input controls. Restore auto and restart
-to try native GameInput again. Keep your existing settings when upgrading.
+Authored Motion and the existing Odyssey/Scorpion patterns are unchanged.
+Walking contacts stay disabled; running/sprinting remain enabled where mapped.
+Keep your existing settings when upgrading, but change a previously forced
+Output=xinput to auto if you want to try native four-motor output.
 
-IF THERE IS NO VIBRATION
-- Confirm Elite works normally in this bottle and the five files are beside
-  EliteDangerous64.exe. Confirm the dinput8 override is Native then Builtin.
-- Try the Output=xinput setting above. A USB connection may help diagnose
-  transport differences; neither USB nor Bluetooth guarantees trigger output.
-- Check restoration-status.json in the bottle's Windows temporary folder:
-    %TEMP%\EDRumbleRestoration\<session>\restoration-status.json
-  The newest session should show platform_profile="macos-crossover" and
-  output_routing="game-slots". No new session usually means the DLL did not
-  load; compare the session time with your launch. profile_match=0 means the
-  executable version is unsupported. output_hook_error=21 means the audio
-  binding is not ready yet; allow the game to finish loading.
-- Include that status file, Mac model/CPU, macOS and CrossOver versions,
-  bottle engine (Rosetta or ARM64EC/FEX), controller/connection, Steam Input
-  state and tested action when reporting a problem. Do not share login logs.
+DIAGNOSTICS
+Opening the app manually shows controller count, actuator mask and engine
+readiness without vibrating. During a normal game launch, two status files
+are written in the bottle's Windows temporary directory:
+  %TEMP%\EDRumbleRestoration\<session>\restoration-status.json
+  %TEMP%\EDRumbleRestoration\<session>\macos-haptics-status.json
+Use the newest session. The host output is macos-corehaptics when native is
+selected, macos-handoff during a transition, or gameinput/xinput for fallback.
+macos_helper_polls > 0 confirms the companion connected to this game session.
 
-This build avoids rewriting CrossOver's system XInput code. Game-side hooks
-still require working x64 code translation. ARM64EC/FEX bottles are
-experimental; a working Rosetta bottle is a useful comparison if available.
-Synthetic Windows tests passed; they do not establish physical Mac vibration.
+Native status codes: 0 = no current error (also check ready); 1 = no native controller;
+2 = multiple controllers; 3 = sole controller is not Xbox;
+4 = missing individual actuators; 5 = engine/playback failure.
+failed_actuator uses 1/2 for handles and 3/4 for triggers. Engine errors and
+stop reasons are included. API success and frame counts are submission
+observations, not measurements of physical motors.
+
+If there is no native status file, check first-launch app approval and keep
+using the XInput fallback. Include both status files, Mac model/CPU, macOS and
+CrossOver versions, bottle engine (Rosetta or ARM64EC/FEX), controller model,
+connection, Steam Input state and tested action in feedback. Do not share
+login logs. Background Core Haptics delivery still needs real Mac testing.
 
 SUPPORTED GAME
 EliteDangerous64.exe version: 2026.10.23.334925
 Required SHA-256:
 ed5a8f8cd10f9a80d3bda5badd7ba1d4fcfc15996c8c7e018852cb170e264b63
-Unsupported executables remain unmodified and restoration stays disabled.
+Unsupported executables leave restoration disabled. ARM64EC/FEX game-side
+hook compatibility remains experimental.
 
 UNINSTALL
-Close Elite and the launcher. Remove the five supplied files, except any
-pre-existing configuration you kept. Restore your backed-up files and the
-previous dinput8 override (or remove the new override if none existed).
-manifest.json lists supplied files and hashes; it is not copied into the game.
+Close Elite and the launcher, allow the companion to exit, then remove the
+five supplied loose files and native app, except pre-existing configuration
+you kept. Restore backed-up files and the previous dinput8 override (or remove
+the new override if none existed). manifest.json lists supplied file hashes.
 
-REFERENCE
-CodeWeavers DLL override instructions:
+REFERENCES
+Apple controller haptics: https://developer.apple.com/videos/play/wwdc2020/10614/
+CrossOver DLL overrides:
 https://support.codeweavers.com/en_US/troubleshooting/troubleshooting-unlisted-applications-cxmac
-CodeWeavers controller/transport guidance:
-https://support.codeweavers.com/using-controllers-in-crossover?kb_language=en_US

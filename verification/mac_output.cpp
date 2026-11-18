@@ -4,11 +4,18 @@
 #include "result_file.hpp"
 #include <cstdio>
 #include <cstdlib>
+#include <cwchar>
 namespace mb=edtrace::macbridge;
 static std::uint64_t instant=100;
 static std::uint64_t Clock() noexcept { return instant; }
 static void Check(bool value,const char* name) { if(!value) { std::fprintf(stderr,"FAIL %s\n",name);std::exit(1); } }
 int wmain(int argc,wchar_t** argv) {
+  if(argc==5&&std::wcscmp(argv[1],L"launch")==0) {
+    verification_result_path=argv[4];
+    Check(edtrace::MacOutputStartControlled(&Clock)==0,"launch fixture initializes its own session");
+    Check(edtrace::MacOutputLaunchControlled(argv[2],argv[3])==0,"Wine starts an owned native Unix launcher without a shell");
+    edtrace::MacOutputStop();Check(VerificationResult("PASS"),"launch result saved");return 0;
+  }
   if(argc==2) verification_result_path=argv[1];
   Check(edtrace::MacOutputStartControlled(&Clock)==0,"owned relay starts on an ephemeral loopback port");
   const auto info=edtrace::MacOutputGetStats();Check(info.listening&&info.port>0,"owned relay reports its private port");
