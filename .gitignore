@@ -12,6 +12,7 @@
 !/src/
 !/include/
 !/vr/
+!/mac/
 !/cmake/
 !/verification/
 !/third_party/

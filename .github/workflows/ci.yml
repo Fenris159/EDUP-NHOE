@@ -5,6 +5,28 @@ on:
 permissions:
   contents: read
 jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build universal native output companion
+        run: >-
+          cmake -S mac -B build/mac -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.3
+      - run: cmake --build build/mac --parallel 2
+      - run: ctest --test-dir build/mac --output-on-failure
+      - name: Verify and sign the native bundle
+        run: |
+          lipo -verify_arch arm64 x86_64 build/mac/ed-macos-haptics.app/Contents/MacOS/ed-macos-haptics
+          codesign --force --sign - --timestamp=none build/mac/ed-macos-haptics.app
+          codesign --verify --deep --strict build/mac/ed-macos-haptics.app
+          tar -czf build/mac/native-app.tar.gz -C build/mac ed-macos-haptics.app
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mac-native-app
+          path: build/mac/native-app.tar.gz
+          if-no-files-found: error
+          retention-days: 14
   native:
     runs-on: ubuntu-latest
     steps:

@@ -5,6 +5,7 @@
 #include "MinHook.h"
 #ifdef ED_CROSSOVER_COMPAT
 #include "edtrace/output_slot_router.hpp"
+#include "edtrace/mac_output.hpp"
 #endif
 #ifdef ED_VR_HAPTICS_MIRROR
 #include "edtrace/vr_output.hpp"
@@ -45,6 +46,11 @@ Mixed Mix() noexcept {
 DWORD WINAPI SelectedOutput(DWORD index, XINPUT_VIBRATION* vibration) noexcept {
   const DWORD incoming = GetLastError();
   if (selected_request_known) {
+#ifdef ED_CROSSOVER_COMPAT
+    if(index==0&&MacOutputSubmit({selected_request.wLeftMotorSpeed/65535.0f,selected_request.wRightMotorSpeed/65535.0f,selected_left,selected_right})) {
+      SetLastError(incoming);return ERROR_SUCCESS;
+    }
+#endif
 #ifdef ED_VR_HAPTICS_MIRROR
     VrOutputPublish({selected_request.wLeftMotorSpeed/65535.0f,selected_request.wRightMotorSpeed/65535.0f,selected_left,selected_right});
 #endif
@@ -107,6 +113,9 @@ DWORD WINAPI Output(DWORD index, XINPUT_VIBRATION* vibration) noexcept {
   selected_override = managed && known && mixed.supplemental;
   const auto gameinput = GameInputOutputGetStats();
   const bool trigger_output = (gameinput.selected && (gameinput.supported_motors & 12) == 12)
+#ifdef ED_CROSSOVER_COMPAT
+    || MacOutputGetStats().active
+#endif
 #ifdef ED_VR_HAPTICS_MIRROR
     || VrOutputGetStats().enabled || VrOutputGetStats().listening
 #endif
@@ -156,7 +165,7 @@ bool XInputOutputRefresh() noexcept {
   return installed.load(std::memory_order_acquire);
 #endif
 }
-void XInputOutputSetReady(bool gain_enabled, bool controller_connected, bool focused) noexcept {
+void XInputOutputSetReady(bool gain_enabled, bool controller_connected, bool focused, bool unique_gamepad) noexcept {
   const DWORD incoming = GetLastError();
   AcquireSRWLockExclusive(&mixer_lock);
   const bool enabled = installed.load(std::memory_order_acquire) && gain_enabled && controller_connected
@@ -165,6 +174,22 @@ void XInputOutputSetReady(bool gain_enabled, bool controller_connected, bool foc
 #endif
     ;
   gamepad_focused = focused;
+#ifdef ED_CROSSOVER_COMPAT
+  const auto previous_generation=MacOutputGetStats().generation;
+  MacOutputSelect(enabled&&focused&&unique_gamepad);
+  if(previous_generation!=MacOutputGetStats().generation) {
+    authored_request={};authored_left=0;authored_right=0;onfoot_frame={};
+  }
+  const bool mac_owned=MacOutputBlocksFallback();
+  // Backend handoff and output submissions share the mixer's order. Native
+  // Core Haptics must stop (or expire) before either fallback can resume.
+  GameInputOutputPoll(enabled&&!mac_owned,focused);
+  if(mac_owned&&fallback_active) {
+    XINPUT_VIBRATION zero{};original.load(std::memory_order_acquire)(0,&zero);fallback_active=false;
+  }
+#else
+  (void)unique_gamepad;
+#endif
   ready.store(enabled, std::memory_order_release);
   if (!enabled) { authored_request = {}; authored_left = 0; authored_right = 0; onfoot_frame = {}; }
   if ((!enabled || !focused) && fallback_active) {
@@ -198,6 +223,9 @@ void XInputOutputSetOnFootFrame(HapticFrame frame, bool active) noexcept {
   selected_left = mixed.left; selected_right = mixed.right;
   const auto gi = GameInputOutputGetStats();
   const bool triggers = ((gi.selected && (gi.supported_motors & 12) == 12)
+#ifdef ED_CROSSOVER_COMPAT
+    || MacOutputGetStats().active
+#endif
 #ifdef ED_VR_HAPTICS_MIRROR
     || VrOutputGetStats().enabled || VrOutputGetStats().listening
 #endif

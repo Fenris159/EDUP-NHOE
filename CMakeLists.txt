@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(edup_nhoe VERSION 0.11.0 LANGUAGES C CXX)
+project(edup_nhoe VERSION 0.12.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,7 +17,7 @@ function(trace_settings target)
 endfunction()
 
 if(BUILD_TESTING)
-  foreach(name IN ITEMS natural_gain motor_ownership_policy vr_haptics)
+  foreach(name IN ITEMS natural_gain motor_ownership_policy vr_haptics mac_haptics)
     add_executable(${name}_verification verification/${name}.cpp)
     trace_settings(${name}_verification)
     add_test(NAME ${name} COMMAND ${name}_verification)
@@ -93,10 +93,10 @@ target_link_libraries(dinput_restoration_chain_proxy PRIVATE "${PREVIOUS_DINPUT_
 
 # CrossOver keeps the same gain, patterns, ownership and focus policy, while
 # routing through game-side slots instead of detouring native Wine libraries.
-add_library(dinput_crossover_proxy SHARED ${RESTORATION_HOST_SOURCES} src/output_slot_router.cpp)
+add_library(dinput_crossover_proxy SHARED ${RESTORATION_HOST_SOURCES} src/output_slot_router.cpp src/mac_output.cpp)
 trace_settings(dinput_crossover_proxy)
 target_compile_definitions(dinput_crossover_proxy PRIVATE ED_CROSSOVER_COMPAT=1)
-target_link_libraries(dinput_crossover_proxy PRIVATE bcrypt minhook authored_motion_output gameinput_native_compat)
+target_link_libraries(dinput_crossover_proxy PRIVATE bcrypt minhook authored_motion_output gameinput_native_compat ws2_32)
 target_link_options(dinput_crossover_proxy PRIVATE -Wl,--exclude-all-symbols)
 set_target_properties(dinput_crossover_proxy PROPERTIES PREFIX "" OUTPUT_NAME dinput8
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/crossover-dinput8"
@@ -127,9 +127,9 @@ if(BUILD_TESTING)
   target_link_libraries(gameinput_adapter_verification PRIVATE gameinput_compat)
   target_link_options(gameinput_adapter_verification PRIVATE -municode)
   add_executable(crossover_output_verification verification/xinput_output.cpp src/xinput_output.cpp
-    src/output_slot_router.cpp src/gameinput_output.cpp src/motor_ownership.cpp src/onfoot_haptics.cpp src/onfoot_runtime.cpp)
+    src/output_slot_router.cpp src/mac_output.cpp src/gameinput_output.cpp src/motor_ownership.cpp src/onfoot_haptics.cpp src/onfoot_runtime.cpp)
   trace_settings(crossover_output_verification)
   target_compile_definitions(crossover_output_verification PRIVATE ED_CROSSOVER_COMPAT=1)
-  target_link_libraries(crossover_output_verification PRIVATE authored_motion_output gameinput_native_compat)
+  target_link_libraries(crossover_output_verification PRIVATE authored_motion_output gameinput_native_compat ws2_32 bcrypt)
   target_link_options(crossover_output_verification PRIVATE -municode)
 endif()

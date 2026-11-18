@@ -2,6 +2,9 @@
 #include "edtrace/control.hpp"
 #include "edtrace/profile.hpp"
 #include "edtrace/xinput_output.hpp"
+#ifdef ED_CROSSOVER_COMPAT
+#include "edtrace/mac_output.hpp"
+#endif
 #include "edtrace/motor_headroom.hpp"
 #include "edtrace/motor_ownership.hpp"
 #include "edtrace/natural_probe.hpp"
@@ -112,12 +115,27 @@ float OnFootStrength(const std::wstring& path) noexcept {
 void SaveStatus() noexcept {
   try {
     const auto s = RestorationGetStatus();
-    const std::string text = std::string("{\"schema\":7,\"host\":\"dinput8\",\"output\":\"") + (s.gameinput_selected ? (s.gameinput_compat_ready ? "gameinput-compat-hid" : "gameinput") : "xinput") + "\",\"profile_match\":" + std::to_string(s.profile_match) +
+    const std::string text = std::string("{\"schema\":8,\"host\":\"dinput8\",\"output\":\"") +
+#ifdef ED_CROSSOVER_COMPAT
+      (MacOutputGetStats().active ? "macos-corehaptics" :
+#endif
+      (s.gameinput_selected ? (s.gameinput_compat_ready ? "gameinput-compat-hid" : "gameinput") : "xinput")
+#ifdef ED_CROSSOVER_COMPAT
+      )
+#endif
+      + "\",\"profile_match\":" + std::to_string(s.profile_match) +
       ",\"start_error\":" + std::to_string(s.start_error) + ",\"output_hook\":" + std::to_string(s.output_hook) +
       ",\"output_hook_error\":" + std::to_string(XInputOutputGetStats().error) +
       ",\"controller_output_mode\":\"" + (gameinput_requested.load() ? "auto" : "xinput") + "\"" +
 #ifdef ED_CROSSOVER_COMPAT
       ",\"platform_profile\":\"macos-crossover\",\"output_routing\":\"game-slots\"" +
+      ",\"macos_bridge_error\":" + std::to_string(MacOutputGetStats().error) +
+      ",\"macos_launch_error\":" + std::to_string(MacOutputGetStats().launch_error) +
+      ",\"macos_client_error\":" + std::to_string(MacOutputGetStats().client_error) +
+      ",\"macos_native_active\":" + std::to_string(MacOutputGetStats().active) +
+      ",\"macos_blocks_fallback\":" + std::to_string(MacOutputGetStats().blocks_fallback) +
+      ",\"macos_controller_count\":" + std::to_string(MacOutputGetStats().controllers) +
+      ",\"macos_motor_mask\":" + std::to_string(MacOutputGetStats().motors) +
 #else
       ",\"platform_profile\":\"standard\",\"output_routing\":\"xinput-detour\"" +
 #endif
@@ -255,6 +273,9 @@ DWORD WINAPI Run(void*) noexcept {
         (!existing_runtime || Hash(Path(existing_runtime)) == gameinput_runtime_sha256)) {
       gameinput_error.store(GameInputOutputStart(gameinput_path, XInputOutputNativeBackend()));
     } else if (GetFileAttributesW(gameinput_path.c_str()) != INVALID_FILE_ATTRIBUTES) gameinput_error.store(ERROR_REVISION_MISMATCH);
+#ifdef ED_CROSSOVER_COMPAT
+    MacOutputStart(directory,log_directory,gameinput_requested.load());
+#endif
     result = NaturalRestorationStart(image, true, log_directory);
     if (result) throw result;
     start_error.store(ERROR_SUCCESS, std::memory_order_release);
@@ -277,9 +298,19 @@ DWORD WINAPI Run(void*) noexcept {
       haptic_focused = focused || VrOutputGetStats().focused;
 #endif
       const bool output_bound = XInputOutputRefresh();
+#ifdef ED_CROSSOVER_COMPAT
+      MacOutputPoll();
+      unsigned connected_slots=connected?1:0;
+      for(DWORD slot=1;slot<4;++slot) {
+        XINPUT_CAPABILITIES other{};if(capabilities(slot,0,&other)==ERROR_SUCCESS) ++connected_slots;
+      }
+      AuthoredTriggersSetReady(gain.enabled && output_connected && haptic_focused && output_bound);
+      XInputOutputSetReady(gain.enabled && haptic_focused && output_bound,output_connected,focused,connected_slots==1);
+#else
       GameInputOutputPoll(gain.enabled && connected && output_bound, focused);
       AuthoredTriggersSetReady(gain.enabled && output_connected && haptic_focused && output_bound);
       XInputOutputSetReady(gain.enabled && haptic_focused && output_bound, output_connected, focused);
+#endif
       TickOnFootFeedback(feedback_allowed && gain.enabled && output_connected && haptic_focused && output_bound,GetTickCount64());
       if (++control_ticks >= 25) {
         control_ticks = 0;
@@ -322,6 +353,9 @@ DWORD WINAPI Run(void*) noexcept {
   // Never remove a live trampoline. Inactive hooks forward until process exit.
   ClearOnFootEventConsumer();
   XInputOutputSetReady(false, false, false);
+#ifdef ED_CROSSOVER_COMPAT
+  MacOutputStop();
+#endif
   StopOnFootFeedback();
   AuthoredTriggersStop();
   GameInputOutputStop();

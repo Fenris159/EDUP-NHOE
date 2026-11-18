@@ -22,7 +22,8 @@ DWORD XInputOutputStart(MotorBackend target, std::uintptr_t image, std::size_t i
 bool XInputOutputRefresh() noexcept;
 // gain_enabled includes the chosen haptic route's focus. Gamepad focus is
 // separate: a focused VR session must not enable background XInput fallback.
-void XInputOutputSetReady(bool gain_enabled, bool controller_connected, bool gamepad_focused = true) noexcept;
+void XInputOutputSetReady(bool gain_enabled, bool controller_connected, bool gamepad_focused = true,
+                         bool unique_gamepad = true) noexcept;
 XInputOutputStats XInputOutputGetStats() noexcept;
 MotorBackend XInputOutputNativeBackend() noexcept;
 // Supplemental output is mixed per motor with the latest authored frame.

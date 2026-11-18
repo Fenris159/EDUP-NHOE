@@ -1,0 +1,19 @@
+cmake_minimum_required(VERSION 3.20)
+project(edup_nhoe_mac VERSION 0.12.0 LANGUAGES CXX OBJCXX)
+if(NOT APPLE)
+  message(FATAL_ERROR "Build the native companion with Xcode on macOS.")
+endif()
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_OBJCXX_STANDARD 17)
+set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+add_executable(ed_macos_haptics MACOSX_BUNDLE main.mm)
+target_include_directories(ed_macos_haptics PRIVATE ../include)
+target_compile_options(ed_macos_haptics PRIVATE -Wall -Wextra -Wpedantic -Werror -fobjc-arc
+  "-ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}/..=.")
+target_link_libraries(ed_macos_haptics PRIVATE "-framework AppKit" "-framework Foundation"
+  "-framework GameController" "-framework CoreHaptics")
+set_target_properties(ed_macos_haptics PROPERTIES OUTPUT_NAME ed-macos-haptics
+  MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist")
+enable_testing()
+add_test(NAME mac_companion_selftest COMMAND "$<TARGET_FILE:ed_macos_haptics>" --self-test)
