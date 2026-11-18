@@ -1,3 +1,8 @@
+#ifdef ED_CROSSOVER_COMPAT
+#include <winsock2.h>
+#include "edtrace/mac_output.hpp"
+#include "edtrace/mac_haptics.hpp"
+#endif
 #include "edtrace/xinput_output.hpp"
 #include "edtrace/onfoot_runtime.hpp"
 #ifdef ED_CROSSOVER_COMPAT
@@ -12,6 +17,10 @@
 #include <cwchar>
 
 namespace {
+#ifdef ED_CROSSOVER_COMPAT
+std::uint64_t native_instant=100;
+std::uint64_t NativeClock() noexcept { return native_instant; }
+#endif
 void Check(bool ok, const char* message) {
   if (!ok) { VerificationResult(std::string("FAIL: ") + message); std::fprintf(stderr, "FAIL: %s\n", message); std::exit(1); }
 }
@@ -265,6 +274,38 @@ int wmain(int argc, wchar_t** argv) {
   Check(snapshot.index == 1, "unverified gain disables remapping");
 #ifdef ED_CROSSOVER_COMPAT
   if(verified) {
+    namespace mb=edtrace::macbridge;
+    Check(edtrace::MacOutputStartControlled(&NativeClock)==0,"native mixer fixture starts owned relay");
+    SOCKET client=socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);Check(client!=INVALID_SOCKET,"native mixer client created");
+    DWORD timeout=500;setsockopt(client,SOL_SOCKET,SO_RCVTIMEO,reinterpret_cast<const char*>(&timeout),sizeof(timeout));
+    sockaddr_in endpoint{};endpoint.sin_family=AF_INET;endpoint.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+    endpoint.sin_port=htons(static_cast<u_short>(edtrace::MacOutputGetStats().port));
+    mb::Message poll{};poll.token.fill(0x5a);poll.active=true;poll.controllers=1;poll.motors=15;poll.device_epoch=1;poll.zeroed=true;
+    const auto exchange=[&]() {
+      ++poll.sequence;const auto packet=mb::Encode(poll);
+      Check(sendto(client,reinterpret_cast<const char*>(packet.data()),packet.size(),0,reinterpret_cast<const sockaddr*>(&endpoint),sizeof(endpoint))==static_cast<int>(packet.size()),"native mixer poll sent");
+      edtrace::MacOutputPoll();unsigned char bytes[mb::kPacketSize+1]{};
+      const int count=recv(client,reinterpret_cast<char*>(bytes),sizeof(bytes),0);mb::Message reply{};
+      Check(count>0&&mb::Decode(bytes,static_cast<std::size_t>(count),reply)&&reply.sequence==poll.sequence,"native mixer reply read");
+      poll.generation=reply.generation;return reply;
+    };
+    exchange();edtrace::XInputOutputSetReady(true,true,true,true);
+    native_instant=550;exchange();native_instant=600;edtrace::XInputOutputSetReady(true,true,true,true);
+    Check(edtrace::MacOutputGetStats().active,"mixer selects ready native route after provider fence");
+    reset();edtrace::XInputOutputSetOnFootFrame({.2f,.3f,.4f,.5f},true);const auto native=exchange();read(&snapshot);
+    Check(native.active&&std::fabs(native.frame.low-.2f)<.00002f&&std::fabs(native.frame.high-.3f)<.00002f&&native.frame.left==.4f&&native.frame.right==.5f,
+          "production mixer delivers body and trigger amplitudes to native relay");
+    Check(snapshot.set_calls==0,"selected native route does not duplicate output through XInput");
+    edtrace::XInputOutputSetOnFootFrame({},false);Check(!edtrace::HapticNonzero(exchange().frame),"supplemental native stop reaches all four channels");
+    edtrace::XInputOutputSetReady(true,true,false,true);Check(!exchange().active,"native route cancels on game focus loss");
+    exchange();edtrace::XInputOutputSetReady(true,true,false,true);
+    Check(!edtrace::MacOutputBlocksFallback(),"native stop acknowledgement clears mixer handoff");
+    reset();edtrace::XInputOutputSetOnFootFrame({.25f,.5f,.7f,.8f},true);read(&snapshot);
+    Check(snapshot.set_calls==0,"background focus never enables XInput fallback");
+    edtrace::XInputOutputSetReady(true,true,true,false);reset();edtrace::XInputOutputSetOnFootFrame({.25f,.5f,.7f,.8f},true);read(&snapshot);
+    Check(!edtrace::MacOutputGetStats().active&&snapshot.set_calls==1&&snapshot.index==0&&snapshot.left==16383&&snapshot.right==32767,
+          "ambiguous native selection returns the same main-motor mix through XInput");
+    edtrace::XInputOutputSetReady(false,true);closesocket(client);edtrace::MacOutputStop();
     *audio_slot=nullptr;
     Check(!edtrace::XInputOutputRefresh(),"audio shutdown releases slot readiness");
     edtrace::XInputOutputSetReady(true,true);

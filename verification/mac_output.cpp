@@ -23,6 +23,12 @@ int wmain(int argc,wchar_t** argv) {
   DWORD timeout=500;setsockopt(client,SOL_SOCKET,SO_RCVTIMEO,reinterpret_cast<const char*>(&timeout),sizeof(timeout));
   sockaddr_in address{};address.sin_family=AF_INET;address.sin_addr.s_addr=htonl(INADDR_LOOPBACK);address.sin_port=htons(static_cast<u_short>(info.port));
   mb::Message request{};request.token.fill(0x5a);request.active=true;request.controllers=1;request.motors=15;request.device_epoch=1;request.zeroed=true;
+  auto foreign=request;foreign.token.fill(0x6b);foreign.sequence=1;const auto unauthorized=mb::Encode(foreign);
+  Check(sendto(client,reinterpret_cast<const char*>(unauthorized.data()),unauthorized.size(),0,reinterpret_cast<const sockaddr*>(&address),sizeof(address))==static_cast<int>(unauthorized.size()),"foreign-session packet sent");
+  edtrace::MacOutputPoll();u_long nonblocking=1;ioctlsocket(client,FIONBIO,&nonblocking);char rejected[81]{};
+  Check(recv(client,rejected,sizeof(rejected),0)==SOCKET_ERROR&&WSAGetLastError()==WSAEWOULDBLOCK&&edtrace::MacOutputGetStats().polls==0,
+        "foreign-session packet receives no reply or native lease");
+  nonblocking=0;ioctlsocket(client,FIONBIO,&nonblocking);
   auto exchange=[&]() {
     ++request.sequence;const auto bytes=mb::Encode(request);
     Check(sendto(client,reinterpret_cast<const char*>(bytes.data()),bytes.size(),0,reinterpret_cast<const sockaddr*>(&address),sizeof(address))==static_cast<int>(bytes.size()),"synthetic capability poll sent");

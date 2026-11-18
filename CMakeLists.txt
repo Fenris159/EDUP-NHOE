@@ -129,7 +129,7 @@ if(BUILD_TESTING)
   add_executable(crossover_output_verification verification/xinput_output.cpp src/xinput_output.cpp
     src/output_slot_router.cpp src/mac_output.cpp src/gameinput_output.cpp src/motor_ownership.cpp src/onfoot_haptics.cpp src/onfoot_runtime.cpp)
   trace_settings(crossover_output_verification)
-  target_compile_definitions(crossover_output_verification PRIVATE ED_CROSSOVER_COMPAT=1)
+  target_compile_definitions(crossover_output_verification PRIVATE ED_CROSSOVER_COMPAT=1 ED_MAC_OUTPUT_FIXTURE=1)
   target_link_libraries(crossover_output_verification PRIVATE authored_motion_output gameinput_native_compat ws2_32 bcrypt)
   target_link_options(crossover_output_verification PRIVATE -municode)
   add_executable(mac_output_verification verification/mac_output.cpp src/mac_output.cpp)
