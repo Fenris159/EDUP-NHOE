@@ -1,4 +1,4 @@
-EDUP - NHOE 0.12.0 PREVIEW - MAC / CROSSOVER DRAG-AND-DROP
+EDUP - NHOE 0.12.1 PREVIEW - MAC / CROSSOVER DRAG-AND-DROP
 
 The native four-motor companion requires macOS 11.3 or newer. Its universal
 binary supports Apple silicon and Intel. The previous Mac XInput route is
@@ -16,12 +16,13 @@ INSTALL
    Add/select dinput8, click Edit, choose Native then Builtin, and save.
    Record any previous override before changing it. An existing correct
    override does not need to be changed again.
-4. Open ed-macos-haptics.app once in Finder. It shows a capability check and
+4. Connect your Xbox controller, then open ed-macos-haptics.app in Finder.
+   The capability check allows up to three seconds for discovery and
    sends NO vibration. The app is ad hoc signed, not Developer ID notarized.
    If macOS blocks it, use System Settings > Privacy & Security > Open Anyway
    when offered, then open it again. Do not disable Gatekeeper globally.
-   Close the capability check after reading it.
-5. Pair/connect your Xbox controller normally. Leave [Controller] Output=auto
+   If GameController reports zero, choose Retry with the controller active.
+5. Close the check and leave [Controller] Output=auto
    in ed-onfoot-haptics.ini, then launch Elite normally. The companion starts
    automatically in the background and exits after the game stops responding.
    Do not manually run the GameInput files or configure a network address.
@@ -68,17 +69,41 @@ The supplied ed-onfoot-haptics.ini starts with:
   [OnFoot]
   Enabled=1
   Strength=60
+  [SCO]
+  Enabled=1
+  Strength=60
   [Controller]
   Output=auto
-Set [OnFoot] Enabled=0 for authored effects only; Strength accepts 0 to 100.
-Authored Motion and the existing Odyssey/Scorpion patterns are unchanged.
+SCO feedback is enabled at 60%, including with a preserved older INI.
+It uses the game's local Status.json in the bottle or Windows Saved Games
+folder. Engagement shakes the main motors unevenly and settles over 2.5
+seconds. Disengagement gives a smooth 2.5-second slowdown in supercruise.
+To change it, edit or add [SCO] Enabled=0 or Strength=0 to 100 in the INI
+and restart.
+
+SHIP WEAPONS
+The preview adds main-motor feedback for matched ship weapon cues. It uses
+a sustained effect for beams, a pulse for each multicannon shot and
+shorter or heavier pulses for other weapon families. Physical calibration
+and the inferred variants still need gameplay verification.
+
+New INI files enable ship feedback at 60%. If you kept an existing INI,
+add this section and restart Elite:
+
+  [ShipCombat]
+  Enabled=1
+  Strength=60
+
+Set ShipCombat Enabled=0 to turn it off. For authored effects only, set
+Enabled=0 under [OnFoot], [SCO] and [ShipCombat].
+Quiet authored Motion samples can now reach the main motors below the old cutoff.
 Walking contacts stay disabled; running/sprinting remain enabled where mapped.
 Keep your existing settings when upgrading, but change a previously forced
 Output=xinput to auto if you want to try native four-motor output.
 
 DIAGNOSTICS
-Opening the app manually shows controller count, actuator mask and engine
-readiness without vibrating. During a normal game launch, two status files
+Opening the app manually shows the detected device, controller count,
+actuator mask and engine readiness without vibrating. During a normal game launch, two status files
 are written in the bottle's Windows temporary directory:
   %TEMP%\EDRumbleRestoration\<session>\restoration-status.json
   %TEMP%\EDRumbleRestoration\<session>\macos-haptics-status.json

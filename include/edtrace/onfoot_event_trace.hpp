@@ -20,18 +20,22 @@ struct OnFootEventTraceStats {
 // Optional recording only. The host supplies explicit sidecar-marker opt-in
 // and verification of the complete game hash. This module checks the exact
 // queue helper, two selector APIs and object lifecycle entry signatures.
-// No callback data, names, other text or audio is read. Selector/lifecycle
+// No callback data, names, other text or audio is read. Static native-route
+// annotations and selected strength RTPC names describe requests only.
+// These diagnostic fields never trigger effects or infer local ownership. Selector/lifecycle
 // records are API requests: result == 1 is AK_Success, not applied-state proof.
-// One session per process; call Start/Stop outside DllMain and audio callbacks.
+// Call Start/Stop outside DllMain and audio callbacks. A stopped recording may
+// be manually re-armed without ending the gameplay session.
 DWORD StartOnFootEventTrace(std::uintptr_t image, std::size_t image_size,
                            bool verified, bool enabled, const wchar_t* log_directory) noexcept;
 bool StopOnFootEventTrace() noexcept;
 OnFootEventTraceStats GetOnFootEventTraceStats() noexcept;
 using OnFootInputConsumer = void (*)(const OnFootInput&) noexcept;
+using ShipWeaponBegin = ShipWeaponAdmission (*)(OnFootInputKind, std::uint64_t, std::uint32_t) noexcept;
 // Hooks can feed a numeric consumer without enabling any recording. The
 // consumer must enqueue only: it runs on the original caller's thread.
 DWORD StartOnFootEventSources(std::uintptr_t image, std::size_t image_size, bool verified,
-                             bool recording, OnFootInputConsumer consumer, const wchar_t* log_directory) noexcept;
+                             OnFootInputConsumer consumer, ShipWeaponBegin ship_begin = nullptr) noexcept;
 // Clear before final Stop to disable all hooks. While a consumer remains,
 // StopOnFootEventTrace closes only the recorder and retains forwarding hooks.
 void ClearOnFootEventConsumer() noexcept;
@@ -46,12 +50,15 @@ struct OnFootEventTraceFixtureTarget {
   // Order: queue Post, RTPC, Switch, Register, Unregister.
   std::array<std::uintptr_t, 5> addresses{};
   std::array<std::array<unsigned char, 32>, 5> signatures{};
+  std::uintptr_t event_action = 0;
+  std::array<unsigned char, 32> event_action_signature{};
   std::uint64_t max_file_bytes = 32ULL * 1024 * 1024;
   std::uint64_t max_capture_ms = kMaxLiveObservationMs;
   ObservationClock observation_clock = nullptr;
 };
 DWORD StartOnFootEventTraceControlledFixture(const OnFootEventTraceFixtureTarget& target,
                                             const wchar_t* log_directory) noexcept;
-DWORD StartOnFootEventSourcesControlledFixture(const OnFootEventTraceFixtureTarget& target, bool recording,
-                                               OnFootInputConsumer consumer, const wchar_t* log_directory) noexcept;
+DWORD StartOnFootEventSourcesControlledFixture(const OnFootEventTraceFixtureTarget& target,
+                                               OnFootInputConsumer consumer,
+                                               ShipWeaponBegin ship_begin = nullptr) noexcept;
 }  // namespace edtrace

@@ -11,7 +11,8 @@ import struct
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.12.0-preview.1"
+VERSION = "0.12.1-preview.5"
+MAC_COMPANION_VERSION = "0.12.1"
 PLATFORMS = ("windows-x64", "linux-proton-x64", "macos-crossover-x64")
 GAME_SHA256 = "ed5a8f8cd10f9a80d3bda5badd7ba1d4fcfc15996c8c7e018852cb170e264b63"
 SDK = ROOT / "third_party/gameinput/4.0.306"
@@ -58,6 +59,8 @@ def collect(platform, windows, linux, gamepad, native_mac):
         info=plistlib.loads(files["Copy-to-game/"+app+"Info.plist"])
         if info.get("CFBundleIdentifier")!="org.fenris159.edup-nhoe.haptics" or info.get("CFBundleExecutable")!="ed-macos-haptics":
             raise ValueError("Unexpected native Mac app identity")
+        if info.get("CFBundleVersion") != MAC_COMPANION_VERSION:
+            raise ValueError(f"Expected native Mac companion {MAC_COMPANION_VERSION} with the updated capability checker")
     else:
         add("Copy-to-game/dinput8.dll", windows / "experimental-proxy/dinput8.dll")
         add("Existing-chain/dinput8.dll", windows / "experimental-chain-proxy/dinput8.dll")
@@ -68,7 +71,12 @@ def collect(platform, windows, linux, gamepad, native_mac):
         add("Copy-to-game/" + name, SDK / "native/bin/x64" / name)
         if digest(files["Copy-to-game/" + name]) != expected:
             raise ValueError(f"Pinned SDK file changed: {name}")
-    files["Copy-to-game/ed-onfoot-haptics.ini"] = b"[OnFoot]\r\nEnabled=1\r\nStrength=60\r\n\r\n[Controller]\r\nOutput=auto\r\n"
+    files["Copy-to-game/ed-onfoot-haptics.ini"] = (
+        b"[OnFoot]\r\nEnabled=1\r\nStrength=60\r\n\r\n"
+        b"[SCO]\r\nEnabled=1\r\nStrength=60\r\n\r\n"
+        b"[ShipCombat]\r\nEnabled=1\r\nStrength=60\r\n\r\n"
+        b"[Controller]\r\nOutput=auto\r\n"
+    )
     helper = "Copy-to-game/ed-vr-haptics/"
     if not mac:
         add(helper + "ed-vr-openxr.dll", windows / "openxr/ed-vr-openxr.dll")

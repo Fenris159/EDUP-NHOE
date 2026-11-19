@@ -10,7 +10,17 @@ Test one action at a time and report what you felt:
 4. A short jetpack boost, native cutoff and landing separately.
 5. Scorpion turret fire and missile launch separately, noting main motors versus triggers or hands.
 6. Focus loss/regain and disabling added effects. Background output should stop, and disabling additions should preserve any active original authored effect.
+7. In a SCO-capable ship already in supercruise, engage SCO, wait, then disengage. Check for a rough shake that settles over 2.5 seconds and a smooth slowdown of the same length. Verify both effects are independent of the Odyssey setting. Ordinary jumps and regaining focus during SCO should add no SCO effect. The game exports the detection state to Status.json, so its write cadence affects timing.
+8. Fire a short beam burst in combat, then release while the ship is otherwise steady. Report the beam size and whether vibration stops with the beam or continues into the audio tail.
 
 For VR, identify whether the output was per hand or separately localized at a trigger. Stock SteamVR and legacy Meta output blend trigger contributions into the corresponding hand. OpenXR trigger separation requires the application's negotiated profile and bound endpoints.
 
+The preview now sends quiet positive main-motor amplitudes that previously became zero at the PC converter's cutoff. The response joins the first native motor command above the cutoff. A zero source amplitude still stops that motor, and hardware may have its own minimum perceptible intensity. When testing a familiar authored cue, report whether quiet portions or fade-outs feel different and whether feedback stops when the cue ends.
+
 Known preview gaps include surface coverage, the inferred walk/run threshold, broader tool/combat mapping, and physical validation across VR frontends. A missing effect should be reported with its exact action and context.
+
+Native ship impact, collision and friction effects use the shared restored Motion output when the game dispatches them. The diagnostic mapping covers 27 native outer events and 17 existing main-motor sources, including authored sustained-impact and friction stops. Three Corvette-specific associations retain an unresolved gameplay role. Incoming shield-hit ownership is still unresolved.
+
+When a support test explicitly enables the optional bounded recorder, its queue records now identify these known native routes and their play/stop source associations. They also retain selected `shield_strength_self`, `hull_strength_self`, `collision_velocity` and `friction_velocity` requests for timing comparisons. A recorded route is not proof that its nested source executed or that the affected ship was yours; ownership remains `unknown`. The self-strength parameter scale still needs live verification, and targeted-ship journal shield values must not be used as your own shield readings.
+
+Each manually started observation stops within ten minutes and must end before the next test is started. The recorder consumes the request before recording so a leftover marker cannot reopen it on relaunch. Removing the marker cancels the current observation. The time limit applies to each observation window.

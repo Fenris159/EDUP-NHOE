@@ -4,10 +4,11 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import plistlib
 import subprocess
 import zipfile
 
-from package_preview import ROOT, VERSION
+from package_preview import MAC_COMPANION_VERSION, ROOT, VERSION
 
 REPOSITORY = "Fenris159/EDUP-NHOE"
 RELEASE_PLATFORMS = ("windows-x64", "linux-proton-x64", "macos-crossover-x64")
@@ -57,6 +58,10 @@ def verify(directory):
                 raise ValueError(f"Unlisted package files: {path.name}")
             if any(hashlib.sha256(archive.read(name)).hexdigest() != digest for name, digest in members.items()):
                 raise ValueError(f"Package member mismatch: {path.name}")
+            if platform == "macos-crossover-x64":
+                info = plistlib.loads(archive.read("Copy-to-game/ed-macos-haptics.app/Contents/Info.plist"))
+                if info.get("CFBundleVersion") != MAC_COMPANION_VERSION:
+                    raise ValueError(f"Expected native Mac companion {MAC_COMPANION_VERSION}")
         assets.extend((path, checksum))
     return assets
 

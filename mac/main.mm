@@ -1,6 +1,7 @@
 #import <AppKit/AppKit.h>
 #import <CoreHaptics/CoreHaptics.h>
 #import <GameController/GameController.h>
+#include "edtrace/mac_controller_check.hpp"
 #include "edtrace/mac_haptics.hpp"
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -87,6 +88,7 @@ static std::uint64_t Now() {
 @property(nonatomic,copy) NSString* label;
 @property(nonatomic) NSInteger engineError,stoppedReason;
 -(void)refresh:(std::uint64_t)now;
+-(void)refresh:(std::uint64_t)now controllers:(NSArray<GCController*>*)connected;
 -(BOOL)ready;
 -(BOOL)quiet:(std::uint64_t)now;
 -(BOOL)render:(HapticFrame)frame now:(std::uint64_t)now;
@@ -111,8 +113,11 @@ static std::uint64_t Now() {
   return YES;
 }
 -(void)refresh:(std::uint64_t)now {
-  if(now<self.nextDiscovery) return;self.nextDiscovery=now+1000;
-  NSArray<GCController*>* connected=[GCController controllers];
+  if(now<self.nextDiscovery) return;
+  [self refresh:now controllers:[GCController controllers]];
+}
+-(void)refresh:(std::uint64_t)now controllers:(NSArray<GCController*>*)connected {
+  self.nextDiscovery=now+1000;
   self.count=static_cast<unsigned>(connected.count);GCController* candidate=connected.count==1?connected.firstObject:nil;
   const bool xbox=candidate&&[candidate.extendedGamepad isKindOfClass:[GCXboxGamepad class]];
   NSArray<GCHapticsLocality>* localities=@[GCHapticsLocalityLeftHandle,GCHapticsLocalityRightHandle,GCHapticsLocalityLeftTrigger,GCHapticsLocalityRightTrigger];
@@ -193,18 +198,52 @@ static int SelfTest() {
   if(!receiver.Accept(decoded,response.token,120)||receiver.Accept(decoded,response.token,121)) return 3;
   std::puts("PASS native companion protocol/capability self-test; no controller APIs called");return 0;
 }
+static NSString* CapabilityStatus(EDDevice* device) {
+  switch(device.status) {
+    case 0: return @"All four actuator engines are ready.";
+    case 1: return @"GameController has yet to report a connected controller.";
+    case 2: return @"GameController reports multiple controllers. Native output requires a single controller.";
+    case 3: return @"The native bridge requires an Xbox controller profile.";
+    case 4: return @"The device reports fewer than four separate actuator localities.";
+    default: return [NSString stringWithFormat:@"Core Haptics engine setup failed (error %ld).",
+                     static_cast<long>(device.engineError)];
+  }
+}
+static int ShowCapabilityCheck(EDDevice* device) {
+  [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+  bool launched=false;
+  for (;;) {
+    @autoreleasepool {
+      NSArray<GCController*>* connected=mb::CheckConnectedControllers([&] {
+        if(!launched) { [NSApp finishLaunching];launched=true; }
+        [NSApp activateIgnoringOtherApps:YES];
+      }, [](double seconds) {
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:seconds]];
+      }, [] {
+        return [GCController controllers];
+      });
+      [device refresh:Now() controllers:connected];
+      [device ready];  // Include an engine failure reported during discovery.
+      NSString* controller=device.label.length ? device.label : @"—";
+      NSAlert* alert=[[NSAlert alloc] init];
+      alert.messageText=@"EDUP native haptics capability check";
+      alert.informativeText=[NSString stringWithFormat:
+        @"Connected controllers: %u\nDetected device: %@\nActuator mask: %u (15 includes all four)\n\n%@\n\nThis check leaves vibration idle.",
+        device.count,controller,device.mask,CapabilityStatus(device)];
+      [alert addButtonWithTitle:@"Done"];
+      [alert addButtonWithTitle:@"Retry"];
+      const auto result=[alert runModal];
+      [device close:Now()];
+      if(result!=NSAlertSecondButtonReturn) return 0;
+    }
+  }
+}
 int main(int argc,char** argv) {
   @autoreleasepool {
     if(argc==2&&std::strcmp(argv[1],"--self-test")==0) return SelfTest();
     [NSApplication sharedApplication];
     EDDevice* device=[[EDDevice alloc] init];
-    if(argc==1) {
-      [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];[device refresh:Now()];
-      [NSApp finishLaunching];
-      NSAlert* alert=[[NSAlert alloc] init];alert.messageText=@"EDUP native haptics capability check";
-      alert.informativeText=[NSString stringWithFormat:@"Connected controllers: %u\nActuator mask: %u (15 means all four)\nEngines ready: %@\nStatus: %u\n\nNo vibration was sent. Close this check and launch Elite normally. The companion will start automatically with the game.",device.count,device.mask,[device ready]?@"yes":@"no",device.status];
-      [NSApp activateIgnoringOtherApps:YES];[alert runModal];[device close:Now()];return 0;
-    }
+    if(argc==1) return ShowCapabilityCheck(device);
     [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
     [NSApp finishLaunching];
     unsigned port=0;mb::Token token{};NSString* statusPath=nil;

@@ -1,4 +1,4 @@
-EDUP - NHOE 0.12.0 PREVIEW - WINDOWS DRAG-AND-DROP
+EDUP - NHOE 0.12.1 PREVIEW - WINDOWS DRAG-AND-DROP
 
 INSTALL
 1. Close Elite and the Frontier launcher. Find the folder containing
@@ -42,7 +42,28 @@ The OpenXR instance API version and enabled extension list are preserved.
 
 SETTINGS
 ed-onfoot-haptics.ini enables the added effects at 60% on a clean install.
-Set [OnFoot] Enabled=0 to use original authored effects only.
+SCO feedback is enabled at 60%, including with a preserved older INI.
+It uses the game's local Status.json in the bottle or Windows Saved Games
+folder. Engagement shakes the main motors unevenly and settles over 2.5
+seconds. Disengagement gives a smooth 2.5-second slowdown in supercruise.
+To change it, edit or add [SCO] Enabled=0 or Strength=0 to 100 in the INI
+and restart.
+
+SHIP WEAPONS
+The preview adds main-motor feedback for matched ship weapon cues. It uses
+a sustained effect for beams, a pulse for each multicannon shot and
+shorter or heavier pulses for other weapon families. Physical calibration
+and the inferred variants still need gameplay verification.
+
+New INI files enable ship feedback at 60%. If you kept an existing INI,
+add this section and restart Elite:
+
+  [ShipCombat]
+  Enabled=1
+  Strength=60
+
+Set ShipCombat Enabled=0 to turn it off. For authored effects only, set
+Enabled=0 under [OnFoot], [SCO] and [ShipCombat].
 Haptic output defaults to [Controller] Output=auto (GameInput with XInput
 fallback). Set Output=xinput and restart Elite to force the two-motor fallback
 for troubleshooting. This does not change controller input or bindings.

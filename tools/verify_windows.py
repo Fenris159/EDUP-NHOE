@@ -46,8 +46,12 @@ def main():
             runs.append({"name": name, "returncode": process.returncode})
             print("PASS", name, flush=True)
 
-        for name in ("natural_gain", "motor_ownership_policy", "vr_haptics", "mac_haptics", "onfoot_haptics", "openxr_output"):
+        for name in ("natural_gain", "motor_ownership_policy", "vr_haptics", "mac_haptics", "mac_controller_check",
+                     "native_motion_metadata", "onfoot_haptics", "sco_haptics", "openxr_output"):
             run(name, build / (name + "_verification.exe"))
+        trace = owned / "native-impact-recording"
+        trace.mkdir()
+        run("native_impact_recording", build / "onfoot_event_trace_verification.exe", [windows(trace)], result=True)
         run("gameinput_adapter", build / "gameinput_adapter_verification.exe", result=True)
         run("mac_output_relay", build / "mac_output_verification.exe", result=True)
         if prefix:

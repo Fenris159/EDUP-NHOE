@@ -1,4 +1,5 @@
 #include "edtrace/onfoot_event_trace.hpp"
+#include "edtrace/native_motion_routes.hpp"
 #include "MinHook.h"
 
 #include <array>
@@ -22,12 +23,18 @@ using PostFn = U32 (WINAPI*)(U32, U64, U32, Callback, void*, const void*, U32);
 using RtpcFn = std::int32_t (WINAPI*)(U32, float, U64, std::int32_t, std::int32_t, bool);
 using SwitchFn = std::int32_t (WINAPI*)(U32, U32, U64);
 using ObjectFn = std::int32_t (WINAPI*)(U64);
+using EventActionFn = std::int32_t (WINAPI*)(U32, U32, U64, std::int32_t, U32, U32);
 static_assert(sizeof(void*) == 8 && std::atomic<U64>::is_always_lock_free &&
               std::atomic<std::size_t>::is_always_lock_free && std::atomic<PostFn>::is_always_lock_free &&
               std::atomic<RtpcFn>::is_always_lock_free && std::atomic<SwitchFn>::is_always_lock_free &&
               std::atomic<ObjectFn>::is_always_lock_free,
               "Recording requires Windows x64 lock-free atomics");
 constexpr Address kQueueRva = 0x4a23790;
+constexpr Address kEventActionRva = 0x4a21030;
+constexpr std::array<unsigned char, 32> kEventActionSignature{{
+    0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x6c,0x24,0x10,0x48,0x89,0x74,0x24,0x18,0x57,
+    0x41,0x56,0x41,0x57,0x48,0x83,0xec,0x20,0x48,0x8b,0x35,0x99,0xd6,0x62,0x01,0x8b,
+}};
 constexpr std::array<Address, 5> kRvas{{kQueueRva,0x4a28ae0,0x4a29150,0x4a25f80,0x4a2a3f0}};
 constexpr std::array<std::array<unsigned char, 32>, 5> kSignatures{{
   {{0x48,0x89,0x5c,0x24,0x10,0x48,0x89,0x74,0x24,0x18,0x48,0x89,0x7c,0x24,0x20,0x41,0x54,0x41,0x56,0x41,0x57,0x48,0x83,0xec,0x30,0x48,0x8b,0x1d,0x38,0xaf,0x62,0x01}},
@@ -65,7 +72,9 @@ std::atomic<PostFn> original_post{nullptr};
 std::atomic<RtpcFn> original_rtpc{nullptr};
 std::atomic<SwitchFn> original_switch{nullptr};
 std::atomic<ObjectFn> original_register{nullptr}, original_unregister{nullptr};
+std::atomic<EventActionFn> original_event_action{nullptr};
 std::atomic<OnFootInputConsumer> numeric_consumer{nullptr};
+std::atomic<ShipWeaponBegin> ship_weapon_begin{nullptr};
 Address image_base = 0;
 std::size_t image_size = 0;
 U64 file_limit = kMaxBytes, anchor_filetime = 0;
@@ -76,6 +85,8 @@ SRWLOCK lifecycle = SRWLOCK_INIT;
 SRWLOCK hook_shutdown = SRWLOCK_INIT;
 HANDLE stop_event = nullptr, worker = nullptr, file = INVALID_HANDLE_VALUE;
 std::array<void*, 5> targets{};
+void* event_action_target = nullptr;
+constexpr DWORD kEventActionHook = 1u << 5;
 std::array<std::array<unsigned char,32>,5> profile_signatures{};
 ObservationWindow observation_window;
 U64 MonotonicMs() noexcept { return GetTickCount64(); }
@@ -132,10 +143,33 @@ void Finish(Record& record, DWORD outgoing) noexcept {
   }
   Enqueue(record); gate.fetch_sub(1, std::memory_order_release);
 }
-void Publish(OnFootInputKind kind, U64 object, U32 id, U32 state, U32 playing,
-             std::int32_t result, float value = 0) noexcept {
+struct InputDelivery {
+  OnFootInputConsumer consumer = nullptr;
+  ShipWeaponAdmission ship{};
+
+  void Publish(OnFootInputKind kind, U64 object, U32 id, U32 state, U32 playing,
+               std::int32_t result, float value = 0) const noexcept {
+    if (consumer) consumer({kind,object,GetTickCount64(),id,state,playing,result,value,ship});
+  }
+};
+InputDelivery BeginInput(OnFootInputKind kind, U64 object, U32 id = 0) noexcept {
   const auto consumer = numeric_consumer.load(std::memory_order_acquire);
-  if (consumer) consumer({kind,object,GetTickCount64(),id,state,playing,result,value});
+  const auto begin = ship_weapon_begin.load(std::memory_order_relaxed);
+  return {consumer, consumer && begin ? begin(kind, object, id) : ShipWeaponAdmission{}};
+}
+std::int32_t WINAPI ObserveEventAction(U32 event, U32 action, U64 object, std::int32_t transition,
+                                      U32 curve, U32 playing) noexcept {
+  const DWORD incoming = GetLastError();
+  const auto kind = OnFootInputKind::StopPlayedEvent;
+  // The game's hardpoint dispatcher can stop the original playing instance
+  // directly through AK::SoundEngine::ExecuteActionOnEvent (Stop = 0).
+  const auto delivery = action == 0 && playing ? BeginInput(kind,object,event) : InputDelivery{};
+  SetLastError(incoming);
+  const auto result = original_event_action.load(std::memory_order_acquire)(event,action,object,transition,curve,playing);
+  const DWORD outgoing = GetLastError();
+  if (delivery.ship.tracked) delivery.Publish(kind,object,event,0,playing,result);
+  SetLastError(outgoing);
+  return result;
 }
 U32 WINAPI ObservePost(U32 event, U64 object, U32 flags, Callback callback, void* cookie,
                        const void* external_sources, U32 requested_playing) noexcept {
@@ -143,6 +177,7 @@ U32 WINAPI ObservePost(U32 event, U64 object, U32 flags, Callback callback, void
   const Address caller = reinterpret_cast<Address>(__builtin_return_address(0));
   Record record{};
   const bool captured = Begin(record, Kind::Post, incoming, caller);
+  const auto delivery = BeginInput(OnFootInputKind::Post, object, event);
   SetLastError(incoming);
   const U32 result = original_post.load(std::memory_order_acquire)(event, object, flags, callback, cookie, external_sources, requested_playing);
   const DWORD outgoing = GetLastError();
@@ -150,15 +185,18 @@ U32 WINAPI ObservePost(U32 event, U64 object, U32 flags, Callback callback, void
     record.event = event; record.game_object = object; record.flags = flags;
     record.requested_playing = requested_playing; record.returned_playing = result; Finish(record,outgoing);
   }
-  Publish(OnFootInputKind::Post,object,event,0,result,0);
+  delivery.Publish(OnFootInputKind::Post,object,event,0,result,0);
   SetLastError(outgoing); return result;
 }
 std::int32_t WINAPI ObserveRtpc(U32 parameter, float value, U64 object, std::int32_t duration,
                                 std::int32_t curve, bool bypass) noexcept {
   const DWORD incoming = GetLastError();
   Record record{};
-  const bool captured = (parameter == 1497268741 || parameter == 103566125 || parameter == 2410709172) &&
+  const bool captured = ObservedTraceParameterName(parameter) &&
                        Begin(record,Kind::Rtpc,incoming,reinterpret_cast<Address>(__builtin_return_address(0)));
+  const bool relevant = parameter == 1497268741 || parameter == 103566125 || parameter == 3377597109 ||
+                        parameter == 1459991788 || parameter == 3661999171 || parameter == 2410709172;
+  const auto delivery = relevant ? BeginInput(OnFootInputKind::Parameter, object, parameter) : InputDelivery{};
   SetLastError(incoming);
   const auto result = original_rtpc.load(std::memory_order_acquire)(parameter,value,object,duration,curve,bypass);
   const DWORD outgoing = GetLastError();
@@ -167,38 +205,39 @@ std::int32_t WINAPI ObserveRtpc(U32 parameter, float value, U64 object, std::int
     record.game_object = object; record.duration = duration; record.curve = curve; record.bypass = bypass;
     record.result = result; Finish(record,outgoing);
   }
-  if (parameter == 1497268741 || parameter == 103566125 || parameter == 3377597109 ||
-      parameter == 1459991788 || parameter == 3661999171 || parameter == 2410709172)
-    Publish(OnFootInputKind::Parameter,object,parameter,0,0,result,value);
+  delivery.Publish(OnFootInputKind::Parameter,object,parameter,0,0,result,value);
   SetLastError(outgoing); return result;
 }
 std::int32_t WINAPI ObserveSwitch(U32 group, U32 state, U64 object) noexcept {
   const DWORD incoming = GetLastError(); Record record{};
-  const bool captured = (group == 1497268741 || group == 103566125 || group == 1979902012) &&
-                       Begin(record,Kind::Switch,incoming,reinterpret_cast<Address>(__builtin_return_address(0)));
+  const bool relevant = group == 1497268741 || group == 103566125 || group == 1979902012;
+  const bool captured = relevant && Begin(record,Kind::Switch,incoming,
+                                          reinterpret_cast<Address>(__builtin_return_address(0)));
+  const auto delivery = relevant ? InputDelivery{numeric_consumer.load(std::memory_order_acquire)} : InputDelivery{};
   SetLastError(incoming); const auto result = original_switch.load(std::memory_order_acquire)(group,state,object);
   const DWORD outgoing = GetLastError();
   if (captured) { record.parameter = group; record.state = state; record.game_object = object; record.result = result; Finish(record,outgoing); }
-  if (group == 1497268741 || group == 103566125 || group == 1979902012)
-    Publish(OnFootInputKind::Switch,object,group,state,0,result);
+  delivery.Publish(OnFootInputKind::Switch,object,group,state,0,result);
   SetLastError(outgoing); return result;
 }
 std::int32_t WINAPI ObserveRegister(U64 object) noexcept {
   const DWORD incoming = GetLastError(); Record record{};
   const bool captured = Begin(record,Kind::Register,incoming,reinterpret_cast<Address>(__builtin_return_address(0)));
+  const auto delivery = BeginInput(OnFootInputKind::Register, object);
   SetLastError(incoming); const auto result = original_register.load(std::memory_order_acquire)(object);
   const DWORD outgoing = GetLastError();
   if (captured) { record.game_object = object; record.result = result; Finish(record,outgoing); }
-  Publish(OnFootInputKind::Register,object,0,0,0,result);
+  delivery.Publish(OnFootInputKind::Register,object,0,0,0,result);
   SetLastError(outgoing); return result;
 }
 std::int32_t WINAPI ObserveUnregister(U64 object) noexcept {
   const DWORD incoming = GetLastError(); Record record{};
   const bool captured = Begin(record,Kind::Unregister,incoming,reinterpret_cast<Address>(__builtin_return_address(0)));
+  const auto delivery = BeginInput(OnFootInputKind::Unregister, object);
   SetLastError(incoming); const auto result = original_unregister.load(std::memory_order_acquire)(object);
   const DWORD outgoing = GetLastError();
   if (captured) { record.game_object = object; record.result = result; Finish(record,outgoing); }
-  Publish(OnFootInputKind::Unregister,object,0,0,0,result);
+  delivery.Publish(OnFootInputKind::Unregister,object,0,0,0,result);
   SetLastError(outgoing); return result;
 }
 std::string Json(const Record& record) {
@@ -213,11 +252,14 @@ std::string Json(const Record& record) {
   if (record.kind == Kind::Post) {
     out << ",\"event_id\":" << record.event << ",\"flags\":" << record.flags
         << ",\"requested_playing_id\":" << record.requested_playing << ",\"returned_playing_id\":" << record.returned_playing;
+    out << ",\"native_motion_route\":";
+    WriteNativeMotionRoute(out,record.event);
   } else {
     out << ",\"result\":" << record.result;
     if (record.kind == Kind::Rtpc) {
       out << ",\"parameter_id\":" << record.parameter << ",\"value_bits\":" << record.value_bits << ",\"value\":";
       if (std::isfinite(record.value)) out << std::setprecision(9) << record.value; else out << "null";
+      if (const char* name = ObservedTraceParameterName(record.parameter)) out << ",\"parameter_name\":\"" << name << '"';
       out << ",\"value_status\":\"" << (std::isfinite(record.value) ? "finite" : "non_finite")
           << "\",\"transition_duration_ms\":" << record.duration << ",\"curve\":" << record.curve
           << ",\"bypass_interpolation\":" << (record.bypass ? "true" : "false");
@@ -248,6 +290,12 @@ bool WriteLine(const std::string& text, bool footer = false) noexcept {
   bytes_written.fetch_add(1, std::memory_order_relaxed); return true;
 }
 void DisableHook() noexcept;
+void DiscardUnstartedRecording(const std::wstring& path) noexcept {
+  if (file == INVALID_HANDLE_VALUE) return;
+  CloseHandle(file);
+  file = INVALID_HANDLE_VALUE;
+  DeleteFileW(path.c_str());
+}
 DWORD WINAPI Writer(void*) noexcept {
   try {
     std::ostringstream header; header.imbue(std::locale::classic());
@@ -258,6 +306,7 @@ DWORD WINAPI Writer(void*) noexcept {
            << ",\"time_anchor_filetime\":" << anchor_filetime << ",\"image_base\":" << image_base
            << ",\"image_size\":" << image_size << ",\"queue_helper_rva\":" << kQueueRva
            << ",\"selector_requests_are_applied_state\":false,\"observed_selector_ids\":[1497268741,103566125,1979902012]"
+           << ",\"native_motion_route_schema\":1,\"observed_rtpc_ids\":[1497268741,103566125,2410709172,1326349511,2581359525,1951144523,4274346379]"
            << ",\"max_file_bytes\":" << file_limit << ",\"controlled_fixture\":" << (controlled_fixture.load() ? "true" : "false")
            << ",\"max_capture_ms\":" << observation_window.DurationMs()
            << ",\"verified_game_sha256\":";
@@ -299,13 +348,36 @@ void DisableHook() noexcept {
     const auto status = MH_DisableHook(targets[i]);
     if (status == MH_OK || status == MH_ERROR_DISABLED) hook_mask.fetch_and(~(DWORD{1} << i), std::memory_order_release);
   }
+  if (hook_mask.load(std::memory_order_acquire) & kEventActionHook) {
+    const auto status = MH_DisableHook(event_action_target);
+    if (status == MH_OK || status == MH_ERROR_DISABLED)
+      hook_mask.fetch_and(~kEventActionHook,std::memory_order_release);
+  }
   ReleaseSRWLockExclusive(&hook_shutdown);
+}
+
+void EnableEventActionHook(Address image, std::size_t size, const OnFootEventTraceFixtureTarget* fixture) noexcept {
+  std::array<unsigned char, 32> bytes{};
+  if (!fixture && (kEventActionRva > size || bytes.size() > size-kEventActionRva)) return;
+  const auto address = fixture ? fixture->event_action : image+kEventActionRva;
+  if (!address || !ReadBytes(address,bytes.data(),bytes.size()) ||
+      bytes != (fixture ? fixture->event_action_signature : kEventActionSignature)) return;
+  auto* target = reinterpret_cast<void*>(address);
+  void* trampoline = nullptr;
+  if (MH_CreateHook(target,reinterpret_cast<void*>(&ObserveEventAction),&trampoline) != MH_OK) return;
+  original_event_action.store(reinterpret_cast<EventActionFn>(trampoline),std::memory_order_release);
+  if (MH_EnableHook(target) != MH_OK) {
+    MH_RemoveHook(target);
+    return;
+  }
+  event_action_target = target;
+  hook_mask.fetch_or(kEventActionHook,std::memory_order_release);
 }
 }  // namespace
 
 static DWORD StartTrace(Address image, std::size_t size, bool verified, bool requested,
                         const wchar_t* log_directory, const OnFootEventTraceFixtureTarget* fixture,
-                        OnFootInputConsumer consumer = nullptr) noexcept {
+                        OnFootInputConsumer consumer = nullptr, ShipWeaponBegin ship_begin = nullptr) noexcept {
   if (!requested && !consumer) return ERROR_SUCCESS;
   AcquireSRWLockExclusive(&lifecycle);
   if (started.load(std::memory_order_acquire)) { ReleaseSRWLockExclusive(&lifecycle); return ERROR_ALREADY_INITIALIZED; }
@@ -323,21 +395,24 @@ static DWORD StartTrace(Address image, std::size_t size, bool verified, bool req
     else { targets[i] = reinterpret_cast<void*>(target); profile_signatures[i] = fixture ? fixture->signatures[i] : kSignatures[i]; }
   }
   if (error) { installation_error.store(error); ReleaseSRWLockExclusive(&lifecycle); return error; }
+  installation_error.store(ERROR_SUCCESS, std::memory_order_release);
   enabled.store(requested); started.store(true); stopped.store(false); controlled_fixture.store(fixture != nullptr);
+  ship_weapon_begin.store(ship_begin, std::memory_order_relaxed);
   numeric_consumer.store(consumer,std::memory_order_release);
   image_base = image; image_size = size;
   file_limit = fixture ? fixture->max_file_bytes : kMaxBytes;
   observation_window.Initialize(fixture && fixture->observation_clock ? fixture->observation_clock : &MonotonicMs,
                                 fixture ? fixture->max_capture_ms : kMaxLiveObservationMs);
   std::size_t created = 0;
+  std::wstring path;
   try {
     for (std::size_t i = 0; i < queue.size(); ++i) queue[i].sequence.store(i, std::memory_order_relaxed);
     FILETIME time{};
     if (!QueryPerformanceFrequency(&qpc_frequency) || qpc_frequency.QuadPart <= 0) error = ERROR_INVALID_DATA;
     QueryPerformanceCounter(&anchor_before); GetSystemTimePreciseAsFileTime(&time); QueryPerformanceCounter(&anchor_after);
     anchor_filetime = (static_cast<U64>(time.dwHighDateTime) << 32) | time.dwLowDateTime;
-    const std::wstring path = requested ? std::wstring(log_directory) + L"\\onfoot-events-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(anchor_filetime) + L".jsonl" : std::wstring{};
     if (!error && requested) {
+      path = std::wstring(log_directory) + L"\\onfoot-events-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(anchor_filetime) + L".jsonl";
       file = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
       if (file == INVALID_HANDLE_VALUE) error = GetLastError();
     }
@@ -361,30 +436,32 @@ static DWORD StartTrace(Address image, std::size_t size, bool verified, bool req
       original_register.store(reinterpret_cast<ObjectFn>(trampolines[3]),std::memory_order_release);
       original_unregister.store(reinterpret_cast<ObjectFn>(trampolines[4]),std::memory_order_release);
     }
-    if (!error && requested) {
-      gate.store(0, std::memory_order_release);
-      worker = CreateThread(nullptr, 0, Writer, nullptr, 0, nullptr); if (!worker) error = GetLastError();
-    }
     if (!error) {
       for (std::size_t i = 0; i < targets.size(); ++i) {
         if (MH_EnableHook(targets[i]) != MH_OK) { error = ERROR_INVALID_FUNCTION; break; }
         hook_mask.fetch_or(DWORD{1} << i,std::memory_order_release);
       }
     }
+    if (!error && ship_begin) EnableEventActionHook(image,size,fixture);
+    if (!error && requested) {
+      gate.store(0, std::memory_order_release);
+      worker = CreateThread(nullptr, 0, Writer, nullptr, 0, nullptr); if (!worker) error = GetLastError();
+    }
   } catch (...) { error = ERROR_NOT_ENOUGH_MEMORY; }
   installation_error.store(error, std::memory_order_release);
   if (error) {
     numeric_consumer.store(nullptr,std::memory_order_release);
+    const DWORD exposed_hooks = hook_mask.load(std::memory_order_acquire);
     gate.fetch_or(kClosed, std::memory_order_acq_rel); DisableHook();
-    if (!worker) for (std::size_t i = 0; i < created; ++i) MH_RemoveHook(targets[i]);
-    if (stop_event) SetEvent(stop_event);
-    const bool done = !worker || WaitForSingleObject(worker, 10000) == WAIT_OBJECT_0;
-    if (done) {
-      if (worker) { CloseHandle(worker); worker = nullptr; }
-      if (file != INVALID_HANDLE_VALUE) { CloseHandle(file); file = INVALID_HANDLE_VALUE; }
-      if (stop_event) { CloseHandle(stop_event); stop_event = nullptr; }
-      stopped.store(true, std::memory_order_release);
+    // In-flight detours may still need trampolines from hooks already enabled.
+    for (std::size_t i = 0; i < created; ++i) {
+      if (!(exposed_hooks & (DWORD{1} << i))) MH_RemoveHook(targets[i]);
     }
+    DiscardUnstartedRecording(path);
+    if (stop_event) { CloseHandle(stop_event); stop_event = nullptr; }
+    stopped.store(true, std::memory_order_release);
+    // An early failure left no hooks to reuse. Allow the next request to start fresh.
+    if (!created) started.store(false, std::memory_order_release);
   }
   ReleaseSRWLockExclusive(&lifecycle); return error;
 }
@@ -394,13 +471,14 @@ DWORD StartOnFootEventTrace(Address image, std::size_t size, bool verified, bool
 DWORD StartOnFootEventTraceControlledFixture(const OnFootEventTraceFixtureTarget& fixture, const wchar_t* directory) noexcept {
   return StartTrace(fixture.image, fixture.image_size, true, true, directory, &fixture);
 }
-DWORD StartOnFootEventSourcesControlledFixture(const OnFootEventTraceFixtureTarget& fixture, bool recording,
-                                               OnFootInputConsumer consumer, const wchar_t* directory) noexcept {
-  return StartTrace(fixture.image,fixture.image_size,true,recording,directory,&fixture,consumer);
+DWORD StartOnFootEventSourcesControlledFixture(const OnFootEventTraceFixtureTarget& fixture,
+                                               OnFootInputConsumer consumer,
+                                               ShipWeaponBegin ship_begin) noexcept {
+  return StartTrace(fixture.image,fixture.image_size,true,false,nullptr,&fixture,consumer,ship_begin);
 }
-DWORD StartOnFootEventSources(Address image, std::size_t size, bool verified, bool recording,
-                             OnFootInputConsumer consumer, const wchar_t* directory) noexcept {
-  return StartTrace(image,size,verified,recording,directory,nullptr,consumer);
+DWORD StartOnFootEventSources(Address image, std::size_t size, bool verified,
+                             OnFootInputConsumer consumer, ShipWeaponBegin ship_begin) noexcept {
+  return StartTrace(image,size,verified,false,nullptr,nullptr,consumer,ship_begin);
 }
 void ClearOnFootEventConsumer() noexcept { numeric_consumer.store(nullptr,std::memory_order_release); }
 DWORD StartOnFootEventRecording(const wchar_t* directory) noexcept {
@@ -425,8 +503,9 @@ DWORD StartOnFootEventRecording(const wchar_t* directory) noexcept {
   queue_drops.store(0); admission_drops.store(0); storage_drops.store(0); limit_reached.store(false); logging_error.store(0);
   FILETIME time{}; QueryPerformanceCounter(&anchor_before); GetSystemTimePreciseAsFileTime(&time); QueryPerformanceCounter(&anchor_after);
   anchor_filetime = (static_cast<U64>(time.dwHighDateTime) << 32) | time.dwLowDateTime;
+  std::wstring path;
   try {
-    const auto path = std::wstring(directory) + L"\\onfoot-events-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(anchor_filetime) + L".jsonl";
+    path = std::wstring(directory) + L"\\onfoot-events-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(anchor_filetime) + L".jsonl";
     file = CreateFileW(path.c_str(),GENERIC_WRITE,FILE_SHARE_READ,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);
     if (file == INVALID_HANDLE_VALUE) error = GetLastError();
     if (!error) { stop_event = CreateEventW(nullptr,TRUE,FALSE,nullptr); if (!stop_event) error = GetLastError(); }
@@ -442,7 +521,7 @@ DWORD StartOnFootEventRecording(const wchar_t* directory) noexcept {
   if (error) {
     gate.fetch_or(kClosed,std::memory_order_acq_rel);
     if (!retained) DisableHook();
-    if (file != INVALID_HANDLE_VALUE) { CloseHandle(file); file = INVALID_HANDLE_VALUE; }
+    DiscardUnstartedRecording(path);
     if (stop_event) { CloseHandle(stop_event); stop_event = nullptr; }
     stopped.store(true); logging_error.store(error);
   }

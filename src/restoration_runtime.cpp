@@ -1,7 +1,9 @@
 #include "edtrace/restoration_runtime.hpp"
 #include "edtrace/control.hpp"
+#include "edtrace/capture_request.hpp"
 #include "edtrace/profile.hpp"
 #include "edtrace/xinput_output.hpp"
+#include "edtrace/sco_feedback.hpp"
 #ifdef ED_CROSSOVER_COMPAT
 #include "edtrace/mac_output.hpp"
 #endif
@@ -93,19 +95,9 @@ bool Profile(std::uintptr_t image, std::size_t& size) noexcept {
   }
   return true;
 }
-bool OnFootCaptureEnabled(const std::wstring& marker) noexcept {
-  constexpr char expected[] = "ed-onfoot-event-trace-v1\n";
-  std::array<char, sizeof(expected)> bytes{}; DWORD count = 0;
-  HANDLE file = CreateFileW(marker.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (file == INVALID_HANDLE_VALUE) return false;
-  const bool read = ReadFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &count, nullptr) != FALSE;
-  CloseHandle(file);
-  return read && count == sizeof(expected) - 1 && !std::memcmp(bytes.data(), expected, sizeof(expected) - 1);
-}
-float OnFootStrength(const std::wstring& path) noexcept {
+float FeedbackStrength(const std::wstring& path, const wchar_t* section) noexcept {
   std::array<wchar_t,32> text{};
-  GetPrivateProfileStringW(L"OnFoot",L"Strength",L"60",text.data(),static_cast<DWORD>(text.size()),path.c_str());
+  GetPrivateProfileStringW(section,L"Strength",L"60",text.data(),static_cast<DWORD>(text.size()),path.c_str());
   wchar_t* end = nullptr; long value = std::wcstol(text.data(),&end,10);
   if (end == text.data() || *end) return .6f;
   if (value < 0) value = 0;
@@ -115,6 +107,7 @@ float OnFootStrength(const std::wstring& path) noexcept {
 void SaveStatus() noexcept {
   try {
     const auto s = RestorationGetStatus();
+    const auto supplemental = GetOnFootRuntimeStats();
     const std::string text = std::string("{\"schema\":8,\"host\":\"dinput8\",\"output\":\"") +
 #ifdef ED_CROSSOVER_COMPAT
       (MacOutputGetStats().active ? "macos-corehaptics" : MacOutputGetStats().blocks_fallback ? "macos-handoff" :
@@ -182,6 +175,8 @@ void SaveStatus() noexcept {
       ",\"onfoot_effects\":" + std::to_string(s.onfoot_effects) + ",\"onfoot_rejected\":" + std::to_string(s.onfoot_rejected) +
       ",\"onfoot_duplicates\":" + std::to_string(s.onfoot_duplicates) + ",\"onfoot_expired_holds\":" + std::to_string(s.onfoot_expired_holds) +
       ",\"onfoot_actor_overflows\":" + std::to_string(s.onfoot_actor_overflows) + ",\"onfoot_output_frames\":" + std::to_string(s.onfoot_output_frames)
+      + ",\"ship_combat_configured\":" + std::to_string(supplemental.ship_configured) +
+      ",\"ship_combat_active\":" + std::to_string(supplemental.ship_active)
 #ifdef ED_VR_HAPTICS_MIRROR
       + ",\"vr_listening\":" + std::to_string(VrOutputGetStats().listening)
       + ",\"vr_error\":" + std::to_string(VrOutputGetStats().error)
@@ -205,6 +200,8 @@ void SaveStatus() noexcept {
 }
 DWORD WINAPI Run(void*) noexcept {
   DWORD result = ERROR_SUCCESS;
+  std::wstring onfoot_marker;
+  CaptureRequest capture_claim;
   try {
     std::array<wchar_t, 32768> temporary{};
     const DWORD count = GetTempPathW(static_cast<DWORD>(temporary.size()), temporary.data());
@@ -250,22 +247,35 @@ DWORD WINAPI Run(void*) noexcept {
     trigger_hook_error.store(AuthoredTriggersStart(image, size, true));
     const auto executable = Path(nullptr);
     const auto directory = executable.substr(0, executable.find_last_of(L"\\/"));
-    const auto onfoot_marker = directory + L"\\ed-onfoot-trace.enable";
+    onfoot_marker = directory + L"\\ed-onfoot-trace.enable";
     const auto onfoot_config = directory + L"\\ed-onfoot-haptics.ini";
 #ifdef ED_VR_HAPTICS_MIRROR
     VrOutputStart(GetPrivateProfileIntW(L"VR",L"Enabled",1,(directory+L"\\ed-vr-haptics.ini").c_str())==1);
 #endif
     const bool feedback_requested = GetPrivateProfileIntW(L"OnFoot",L"Enabled",0,onfoot_config.c_str()) == 1;
-    bool previous_capture_marker = OnFootCaptureEnabled(onfoot_marker), feedback_allowed = feedback_requested;
+    const bool ship_requested = GetPrivateProfileIntW(L"ShipCombat",L"Enabled",0,onfoot_config.c_str()) == 1;
+    const bool supplemental_requested = feedback_requested || ship_requested;
+    ScoFeedback sco;
+    if (GetPrivateProfileIntW(L"SCO", L"Enabled", 1, onfoot_config.c_str()) == 1)
+      sco.Start(FeedbackStrength(onfoot_config, L"SCO"));
+    capture_claim = ClaimCaptureRequest(onfoot_marker.c_str());
+    bool feedback_allowed = feedback_requested;
+    bool ship_allowed = ship_requested;
     // Diagnostic source/audio reads are opt-in, separate from authored motor
     // routing. Each native writer also enforces its own monotonic deadline.
-    if (previous_capture_marker)
+    if (capture_claim)
       trigger_trace_error.store(StartAuthoredTriggerTrace(image, size, true, log_directory.c_str()));
-    if (feedback_requested) StartOnFootFeedback(OnFootStrength(onfoot_config));
-    const auto consumer = feedback_requested ? &QueueOnFootInput : nullptr;
-    const DWORD source_result = StartOnFootEventSources(image,size,true,previous_capture_marker,consumer,log_directory.c_str());
-    onfoot_trace_error.store(source_result);
-    if (source_result && feedback_requested) StopOnFootFeedback();
+    if (supplemental_requested)
+      StartOnFootFeedback(FeedbackStrength(onfoot_config,L"OnFoot"),ship_requested,
+                          FeedbackStrength(onfoot_config,L"ShipCombat"),feedback_requested);
+    const auto consumer = supplemental_requested ? &QueueOnFootInput : nullptr;
+    const auto ship_begin = ship_requested ? &BeginShipWeaponInput : nullptr;
+    const DWORD source_result = consumer ? StartOnFootEventSources(image,size,true,consumer,ship_begin) :
+        StartOnFootEventTrace(image,size,true,static_cast<bool>(capture_claim),log_directory.c_str());
+    const DWORD recording_result = !source_result && consumer && capture_claim ?
+        StartOnFootEventRecording(log_directory.c_str()) : source_result;
+    onfoot_trace_error.store(recording_result);
+    if (source_result && supplemental_requested) StopOnFootFeedback();
     const auto gameinput_path = directory + L"\\GameInputRedist.dll";
     const auto helper_path = directory + L"\\GameInputRawInputProxy.exe";
     const auto existing_runtime = GetModuleHandleW(L"GameInputRedist.dll");
@@ -315,38 +325,40 @@ DWORD WINAPI Run(void*) noexcept {
       AuthoredTriggersSetReady(gain.enabled && output_connected && haptic_focused && output_bound);
       XInputOutputSetReady(gain.enabled && haptic_focused && output_bound, output_connected, focused);
 #endif
-      TickOnFootFeedback(feedback_allowed && gain.enabled && output_connected && haptic_focused && output_bound,GetTickCount64());
+      const bool feedback_ready = gain.enabled && output_connected && haptic_focused && output_bound;
+      const auto now = GetTickCount64();
+      TickOnFootFeedback(feedback_allowed && feedback_ready, now, sco.Tick(feedback_ready, now), ship_allowed && feedback_ready);
       if (++control_ticks >= 25) {
         control_ticks = 0;
         if (feedback_requested) {
           feedback_allowed = GetPrivateProfileIntW(L"OnFoot",L"Enabled",0,onfoot_config.c_str()) == 1;
-          SetOnFootFeedbackStrength(OnFootStrength(onfoot_config));
+          SetOnFootFeedbackStrength(FeedbackStrength(onfoot_config,L"OnFoot"));
+        }
+        if (ship_requested) {
+          ship_allowed = GetPrivateProfileIntW(L"ShipCombat",L"Enabled",0,onfoot_config.c_str()) == 1;
+          SetShipWeaponFeedbackStrength(FeedbackStrength(onfoot_config,L"ShipCombat"));
         }
         const auto capture = GetOnFootEventTraceStats();
-        const bool capture_marker = OnFootCaptureEnabled(onfoot_marker);
-        if (capture_marker && !previous_capture_marker) {
+        const auto trigger_capture = GetAuthoredTriggerTraceStats();
+        if (!capture_claim && (capture_claim = ClaimCaptureRequest(onfoot_marker.c_str()))) {
           const DWORD rearmed = capture.started ? StartOnFootEventRecording(log_directory.c_str()) :
-            StartOnFootEventSources(image,size,true,true,consumer,log_directory.c_str());
+            StartOnFootEventTrace(image,size,true,true,log_directory.c_str());
           onfoot_trace_error.store(rearmed);
           if (!GetAuthoredTriggerTraceStats().started)
             trigger_trace_error.store(StartAuthoredTriggerTrace(image,size,true,log_directory.c_str()));
           SaveStatus();
-        }
-        if (capture.started && !capture.stopped &&
-            (!capture_marker || capture.limit_reached || capture.time_limit_reached || capture.logging_error)) {
+        } else if (capture_claim &&
+                   (!CaptureRequestActive(onfoot_marker.c_str(), capture_claim) ||
+                    capture.limit_reached || capture.time_limit_reached || capture.logging_error ||
+                    ((trigger_capture.time_limit_reached || trigger_capture.logging_error) &&
+                     !trigger_capture.stopped) ||
+                    onfoot_trace_error.load())) {
           if (!StopOnFootEventTrace()) onfoot_trace_error.store(ERROR_TIMEOUT);
-          // Consume our request at the deadline: keeping the same marker or
-          // relaunching the game must not automatically open another window.
-          if (capture_marker && OnFootCaptureEnabled(onfoot_marker)) DeleteFileW(onfoot_marker.c_str());
           if (!StopAuthoredTriggerTrace()) trigger_trace_error.store(ERROR_TIMEOUT);
+          RetireCaptureRequest(onfoot_marker.c_str(), capture_claim);
+          capture_claim = {};
           SaveStatus();
         }
-        const auto trigger_capture = GetAuthoredTriggerTraceStats();
-        if (trigger_capture.started && !trigger_capture.stopped &&
-            (!capture_marker || trigger_capture.time_limit_reached || trigger_capture.logging_error)) {
-          if (!StopAuthoredTriggerTrace()) trigger_trace_error.store(ERROR_TIMEOUT);
-        }
-        previous_capture_marker = OnFootCaptureEnabled(onfoot_marker);
       }
       const bool active = XInputOutputGetStats().ready;
       if (active != previous_ready || ++ticks >= 250) { SaveStatus(); ticks = 0; previous_ready = active; }
@@ -370,6 +382,7 @@ DWORD WINAPI Run(void*) noexcept {
 #endif
   if (!StopOnFootEventTrace()) onfoot_trace_error.store(ERROR_TIMEOUT);
   if (!StopAuthoredTriggerTrace()) trigger_trace_error.store(ERROR_TIMEOUT);
+  if (capture_claim) RetireCaptureRequest(onfoot_marker.c_str(), capture_claim);
   const DWORD restoration = NaturalProbeStop(10000);
   if (restoration) start_error.store(restoration, std::memory_order_release);
   stopped.store(true, std::memory_order_release); SaveStatus();

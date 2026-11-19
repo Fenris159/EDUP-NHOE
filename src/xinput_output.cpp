@@ -1,5 +1,7 @@
 #include "edtrace/xinput_output.hpp"
+#include "edtrace/motor_headroom.hpp"
 #include "edtrace/motor_ownership.hpp"
+#include "edtrace/motor_sender_profile.hpp"
 #include "edtrace/gameinput_output.hpp"
 #include "edtrace/authored_triggers.hpp"
 #include "MinHook.h"
@@ -33,6 +35,11 @@ HapticFrame onfoot_frame{};
 bool gamepad_focused = true, fallback_active = false;
 
 WORD Word(float value) noexcept { return static_cast<WORD>(HapticUnit(value) * 65535.0f); }
+WORD ExtendQuietMotor(WORD native, float amplitude, double endpoint) noexcept {
+  // Both comparisons reject NaN and infinities before the integer conversion.
+  if (native || !(amplitude > 0.0f && amplitude <= motor_profile::quiet_cutoff)) return native;
+  return static_cast<WORD>(amplitude * (endpoint / motor_profile::quiet_cutoff));
+}
 struct Mixed { XINPUT_VIBRATION main{}; float left = 0, right = 0; bool supplemental = false; };
 Mixed Mix() noexcept {
   const WORD low = Word(onfoot_frame.low), high = Word(onfoot_frame.high);
@@ -106,11 +113,20 @@ DWORD WINAPI Output(DWORD index, XINPUT_VIBRATION* vibration) noexcept {
   const auto trigger_frame = AuthoredTriggersCurrentFrame();
   Mixed mixed{snapshot, trigger_frame.valid ? trigger_frame.left : 0, trigger_frame.valid ? trigger_frame.right : 0, false};
   const bool managed = wwise && enabled && RoutedIndex(enabled,writer,index) == 0;
+  bool recovered_quiet = false;
   if (managed && known) {
-    authored_request = snapshot; authored_left = mixed.left; authored_right = mixed.right; mixed = Mix();
+    authored_request = snapshot;
+    if (writer == Writer::WwiseShared) {
+      const auto raw = MotorSenderScope::Current();
+      authored_request.wLeftMotorSpeed = ExtendQuietMotor(snapshot.wLeftMotorSpeed, raw.left, motor_profile::quiet_left_endpoint);
+      authored_request.wRightMotorSpeed = ExtendQuietMotor(snapshot.wRightMotorSpeed, raw.right, motor_profile::quiet_right_endpoint);
+      recovered_quiet = authored_request.wLeftMotorSpeed != snapshot.wLeftMotorSpeed ||
+        authored_request.wRightMotorSpeed != snapshot.wRightMotorSpeed;
+    }
+    authored_left = mixed.left; authored_right = mixed.right; mixed = Mix();
   }
   selected_request_known = known; selected_request = mixed.main; selected_left = mixed.left; selected_right = mixed.right;
-  selected_override = managed && known && mixed.supplemental;
+  selected_override = managed && known && (mixed.supplemental || recovered_quiet);
   const auto gameinput = GameInputOutputGetStats();
   const bool trigger_output = (gameinput.selected && (gameinput.supported_motors & 12) == 12)
 #ifdef ED_CROSSOVER_COMPAT

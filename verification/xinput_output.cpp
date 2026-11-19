@@ -4,6 +4,7 @@
 #include "edtrace/mac_haptics.hpp"
 #endif
 #include "edtrace/xinput_output.hpp"
+#include "edtrace/motor_headroom.hpp"
 #include "edtrace/onfoot_runtime.hpp"
 #ifdef ED_CROSSOVER_COMPAT
 #include "edtrace/output_slot_router.hpp"
@@ -15,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
+#include <limits>
 
 namespace {
 #ifdef ED_CROSSOVER_COMPAT
@@ -141,6 +143,51 @@ int wmain(int argc, wchar_t** argv) {
   Check(engine(0, &zero) == 0, "engine stop after authored stop forwarded");
   read(&snapshot); Check(snapshot.set_calls == calls + (verified ? 2 : 3), "authored stop releases ownership");
   if (verified) {
+    {
+      // A positive main-motor pair recorded after gain restoration reached
+      // the original converter as two zero WORDs. Exercise the real router.
+      const edtrace::MotorSenderScope observed(0.00253476342f, 0.0494424514f);
+      SetLastError(0x25253535);
+      Check(wwise(1, &zero) == 0 && GetLastError() == 0x88776655, "recovered quiet frame preserves native result and LastError");
+      read(&snapshot);
+      Check(snapshot.index == 0 && snapshot.left == 294 && snapshot.right == 10935 &&
+            snapshot.incoming_error == 0x25253535 && zero.wLeftMotorSpeed == 0 && zero.wRightMotorSpeed == 0,
+            "captured quiet frame reaches both motors without modifying the original request");
+      const auto quiet_writes = snapshot.set_calls;
+      Check(engine(0, &zero) == 0, "engine zero during a quiet authored pulse accepted"); read(&snapshot);
+      Check(snapshot.set_calls == quiet_writes, "recovered quiet frame owns the same short lease");
+      Check(retry(1, &zero) == 0, "native termination retry still sends zero"); read(&snapshot);
+      Check(snapshot.left == 0 && snapshot.right == 0, "quiet-frame scope does not alter a termination retry");
+    }
+    {
+      const edtrace::MotorSenderScope boundary(0.04999999701976776f, 0.04999999701976776f);
+      Check(wwise(1, &zero) == 0, "last float below the converter cutoff accepted"); read(&snapshot);
+      Check(snapshot.left == 5816 && snapshot.right == 11059, "quiet extension joins the native cutoff without a motor-word step");
+    }
+    {
+      const edtrace::MotorSenderScope boundary(0.05000000074505806f, 0.05000000074505806f);
+      XINPUT_VIBRATION native_words{5816, 11059};
+      Check(wwise(1, &native_words) == 0, "first float above the converter cutoff accepted"); read(&snapshot);
+      Check(snapshot.left == 5816 && snapshot.right == 11059 &&
+            snapshot.pointer == reinterpret_cast<ULONG_PTR>(&native_words), "native calibrated words and pointer pass through above the cutoff");
+    }
+    {
+      const edtrace::MotorSenderScope invalid(std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN());
+      Check(wwise(1, &zero) == 0, "nonfinite source frame accepted as silence"); read(&snapshot);
+      Check(snapshot.left == 0 && snapshot.right == 0, "nonfinite inputs cannot create vibration");
+    }
+    {
+      const edtrace::MotorSenderScope stopped(0, 0);
+      Check(wwise(1, &zero) == 0, "native zero stop accepted after quiet frame"); read(&snapshot);
+      Check(snapshot.left == 0 && snapshot.right == 0 && snapshot.pointer == reinterpret_cast<ULONG_PTR>(&zero),
+            "explicit native zero reaches the backend without substitution");
+    }
+    {
+      const edtrace::MotorSenderScope unowned(.025f, .025f);
+      Check(wwise(4, &zero) == 0, "unowned slot forwards the original request"); read(&snapshot);
+      Check(snapshot.index == 4 && snapshot.left == 0 && snapshot.right == 0 && snapshot.pointer == reinterpret_cast<ULONG_PTR>(&zero),
+            "quiet extension applies only to the owned route");
+    }
     Check(wwise(1, &pulse) == 0, "authored frame before supplemental test");
     edtrace::XInputOutputSetOnFootFrame({.5f,.25f,.25f,.5f},true); read(&snapshot);
     Check(snapshot.left == 32767 && snapshot.right == 54321 && snapshot.index == 0,
@@ -194,7 +241,14 @@ int wmain(int argc, wchar_t** argv) {
     Check(wwise(0,&pulse) == 0,"late authored request after shutdown stays quiet"); read(&snapshot);
     Check(snapshot.set_calls == shutdown_calls,"shutdown cannot replay late fallback output");
     edtrace::XInputOutputSetReady(true,true,true);
-    edtrace::StartOnFootFeedback(.5f);
+    XINPUT_VIBRATION travel_native{8000,40000};
+    Check(wwise(1,&travel_native) == 0,"authored frame reaches output alongside travel feedback");
+    edtrace::TickOnFootFeedback(false,850,{.57f,.45f,0,0}); read(&snapshot);
+    Check(snapshot.left == 37354 && snapshot.right == 40000,"SCO works with Odyssey additions off and preserves a stronger authored motor");
+    edtrace::TickOnFootFeedback(false,860); read(&snapshot);
+    Check(snapshot.left == 8000 && snapshot.right == 40000,"ending the SCO pulse restores the current authored frame");
+    Check(wwise(1,&zero) == 0,"authored stop after travel pulse");
+    edtrace::StartOnFootFeedback(.5f,true,.5f);
     edtrace::TickOnFootFeedback(true,900);
     edtrace::QueueOnFootInput({edtrace::OnFootInputKind::Register,1100,1000,0,0,0,1,0});
     edtrace::QueueOnFootInput({edtrace::OnFootInputKind::Parameter,1100,1000,1497268741,0,0,1,1});
@@ -250,13 +304,88 @@ int wmain(int argc, wchar_t** argv) {
     edtrace::QueueOnFootInput({edtrace::OnFootInputKind::Post,1100,1950,1697380579,0,1,0,0});
     edtrace::TickOnFootFeedback(true,1960); read(&snapshot);
     Check(snapshot.left == 0 && snapshot.right == 0,"queued background weapon onset cannot replay after focus regain");
-    edtrace::QueueOnFootInput({edtrace::OnFootInputKind::Post,1100,2000,1697380579,0,1,0,0});
-    edtrace::TickOnFootFeedback(true,2000);
+
+    using Input = edtrace::OnFootInput;
+    using Kind = edtrace::OnFootInputKind;
+    constexpr std::uint64_t hardpoint = 8800;
+    const auto begin_ship = [](Input input) {
+      input.ship = edtrace::BeginShipWeaponInput(input.kind,input.object,input.id);
+      return input;
+    };
+    const auto ship = [&](Input input) { edtrace::QueueOnFootInput(begin_ship(input)); };
+    edtrace::TickOnFootFeedback(false,2000,{},true);
+    ship({Kind::Register,hardpoint,2010,0,0,0,1});
+    ship({Kind::Parameter,hardpoint,2010,1497268741,0,0,1,1});
+    XINPUT_VIBRATION ship_native{2500,7000};
+    Check(wwise(1,&ship_native) == 0,"native frame before ship beam cue");
+    ship({Kind::Post,hardpoint,2020,4054225129,0,1});
+    edtrace::TickOnFootFeedback(false,2020,{},true); read(&snapshot);
+    Check(snapshot.left == 4915 && snapshot.right == 8191,"owned medium beam starts on both main motors with on-foot effects off");
+    edtrace::TickOnFootFeedback(false,2120,{},true); read(&snapshot);
+    Check(snapshot.left == 2949 && snapshot.right == 7000,"beam settles into a sustain and preserves the stronger authored motor");
+    const auto unrelated_registration = begin_ship({Kind::Register,9901,2130,0,0,0,1});
+    ship({Kind::Post,hardpoint,2140,4054225128,0,1});
+    edtrace::TickOnFootFeedback(false,2140,{},true); read(&snapshot);
+    Check(snapshot.left == 2949 && snapshot.right == 7000,"alternate LOD preserves the hold with unrelated work in flight");
+    edtrace::QueueOnFootInput(unrelated_registration);
+    ship({Kind::Post,hardpoint,2160,3037970381,0,1});
+    edtrace::TickOnFootFeedback(false,2160,{},true); read(&snapshot);
+    Check(snapshot.left == 2500 && snapshot.right == 7000,"beam release from a different audio LOD preserves authored vibration");
+    Check(wwise(1,&zero) == 0,"native stop before ship overlap control");
+
+    const auto pending_start = begin_ship({Kind::Post,hardpoint,2200,4054225129,0,1});
+    ship({Kind::Post,hardpoint,2210,3037970380,0,1});
+    edtrace::TickOnFootFeedback(false,2220,{},true); read(&snapshot);
+    Check(snapshot.left == 0 && snapshot.right == 0,"ship output remains quiet while earlier native work is pending");
+    edtrace::QueueOnFootInput(pending_start);
+    edtrace::TickOnFootFeedback(false,2230,{},true); read(&snapshot);
+    Check(snapshot.left == 0 && snapshot.right == 0,"late successful start cannot overtake an overlapping release");
+
+    ship({Kind::Post,hardpoint,2240,4054225129,0,1});
+    edtrace::TickOnFootFeedback(false,2240,{},true); read(&snapshot);
+    Check(snapshot.left == 4915 && snapshot.right == 8191,"isolated firing resumes after ambiguous callbacks");
+    const auto pending_release = begin_ship({Kind::Post,hardpoint,2250,3037970380,0,1});
+    edtrace::TickOnFootFeedback(false,2260,{},true); read(&snapshot);
+    Check(snapshot.left == 0 && snapshot.right == 0,"in-flight release silences the active hold");
+    edtrace::QueueOnFootInput(pending_release);
+    edtrace::TickOnFootFeedback(false,2270,{},true); read(&snapshot);
+    Check(snapshot.left == 0 && snapshot.right == 0,"completed release keeps the hold quiet");
+
+    ship({Kind::Post,hardpoint,2280,1616298863,0,1});
+    edtrace::TickOnFootFeedback(false,2280,{},true); read(&snapshot);
+    Check(snapshot.left == 0 && snapshot.right == 0,"multicannon spool is quiet before its shot");
+    ship({Kind::Post,hardpoint,2400,1489337830,0,1});
+    edtrace::TickOnFootFeedback(false,2400,{},true); read(&snapshot);
+    Check(snapshot.left == 9437 && snapshot.right == 7339,"small multicannon delivers a pulse on its shot cue");
+    edtrace::TickOnFootFeedback(false,3230,{},true); read(&snapshot);
+    Check(snapshot.left == 0 && snapshot.right == 0,"multicannon pulse ends during a pause");
+    ship({Kind::Post,hardpoint,3240,1489337830,0,1});
+    edtrace::TickOnFootFeedback(false,3240,{},true); read(&snapshot);
+    Check(snapshot.left == 9437 && snapshot.right == 7339,"later shots can resume during the same multicannon hold");
+    ship({Kind::Post,hardpoint,3260,909378176,0,1});
+    ship({Kind::Post,hardpoint,3290,1489337830,0,1});
+    edtrace::TickOnFootFeedback(false,3290,{},true); read(&snapshot);
+    Check(snapshot.left == 0 && snapshot.right == 0,"multicannon release cancels recoil and rejects late shot markers");
+
+    ship({Kind::Post,hardpoint,3300,3728187784,0,1});
+    edtrace::TickOnFootFeedback(false,3300,{},true); read(&snapshot);
+    Check(snapshot.left == 3276 && snapshot.right == 10485,"offline-inferred pulse laser delivers the intended sharp impulse");
+    edtrace::TickOnFootFeedback(false,3365,{},true); read(&snapshot);
+    Check(snapshot.left == 0 && snapshot.right == 0,"inferred pulse laser expires without a release cue");
+    ship({Kind::Register,hardpoint,3400,0,0,0,1});
+    ship({Kind::Parameter,hardpoint,3410,1497268741,0,0,1,0});
+    ship({Kind::Post,hardpoint,3420,3728187784,0,1});
+    edtrace::TickOnFootFeedback(false,3420,{},true); read(&snapshot);
+    Check(snapshot.left == 0 && snapshot.right == 0,"reused hardpoint with detached ownership produces no recoil");
+
+    edtrace::TickOnFootFeedback(true,3500);
+    edtrace::QueueOnFootInput({Kind::Post,1100,3510,1697380579,0,1,0,0});
+    edtrace::TickOnFootFeedback(true,3510);
     for (unsigned i = 0; i < 4096; ++i)
-      edtrace::QueueOnFootInput({edtrace::OnFootInputKind::Post,9000,2001,1697380579,0,1,0,0});
-    edtrace::TickOnFootFeedback(true,2001); read(&snapshot);
+      edtrace::QueueOnFootInput({Kind::Post,9000,3511,1697380579,0,1,0,0});
+    edtrace::TickOnFootFeedback(true,3511,{},true); read(&snapshot);
     const auto feedback = edtrace::GetOnFootRuntimeStats();
-    Check(feedback.faulted && !feedback.active && feedback.dropped == 2048 && snapshot.left == 0 && snapshot.right == 0,
+    Check(feedback.faulted && !feedback.active && !feedback.ship_active && feedback.dropped == 2048 && snapshot.left == 0 && snapshot.right == 0,
           "input queue loss disables new effects and sends zero");
     edtrace::StopOnFootFeedback();
   }
@@ -292,6 +421,16 @@ int wmain(int argc, wchar_t** argv) {
     exchange();edtrace::XInputOutputSetReady(true,true,true,true);
     native_instant=550;exchange();native_instant=600;edtrace::XInputOutputSetReady(true,true,true,true);
     Check(edtrace::MacOutputGetStats().active,"mixer selects ready native route after provider fence");
+    reset();
+    {
+      const edtrace::MotorSenderScope quiet(.025f, .025f);
+      Check(wwise(1, &zero) == 0, "quiet frame accepted by native Mac relay");
+      const auto native_quiet = exchange(); read(&snapshot);
+      Check(native_quiet.active && std::fabs(native_quiet.frame.low - 0.04437324f) < .00002f &&
+            std::fabs(native_quiet.frame.high - 0.08436713f) < .00002f && snapshot.set_calls == 0,
+            "native Mac relay receives the recovered main channels without duplicating XInput");
+    }
+    Check(wwise(1, &zero) == 0 && !edtrace::HapticNonzero(exchange().frame), "native Mac relay clears the recovered pulse on an explicit stop");
     reset();edtrace::XInputOutputSetOnFootFrame({.2f,.3f,.4f,.5f},true);const auto native=exchange();read(&snapshot);
     Check(native.active&&std::fabs(native.frame.low-.2f)<.00002f&&std::fabs(native.frame.high-.3f)<.00002f&&native.frame.left==.4f&&native.frame.right==.5f,
           "production mixer delivers body and trigger amplitudes to native relay");

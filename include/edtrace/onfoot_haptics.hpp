@@ -4,13 +4,19 @@
 #include <cstdint>
 
 namespace edtrace {
-enum class OnFootInputKind : std::uint32_t { Post, Parameter, Switch, Register, Unregister };
+enum class OnFootInputKind : std::uint32_t { Post, Parameter, Switch, Register, Unregister, StopPlayedEvent };
+struct ShipWeaponAdmission {
+  std::uint64_t activity = 0;
+  std::uint32_t generation = 0;
+  bool tracked = false, overlapping = false;
+};
 struct OnFootInput {
   OnFootInputKind kind = OnFootInputKind::Post;
   std::uint64_t object = 0, milliseconds = 0;
   std::uint32_t id = 0, state = 0, playing = 0;
   std::int32_t result = 0;
   float value = 0;
+  ShipWeaponAdmission ship{};
 };
 struct OnFootHapticsStats {
   std::uint64_t accepted = 0, rejected = 0, duplicate_cues = 0, expired_holds = 0, actor_overflows = 0;

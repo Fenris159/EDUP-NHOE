@@ -45,7 +45,8 @@ class PackageContract(unittest.TestCase):
         app=self.native_mac / "ed-macos-haptics.app/Contents"
         (app / "MacOS").mkdir(parents=True)
         (app / "_CodeSignature").mkdir()
-        (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier":"org.fenris159.edup-nhoe.haptics","CFBundleExecutable":"ed-macos-haptics"}))
+        (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier":"org.fenris159.edup-nhoe.haptics",
+            "CFBundleExecutable":"ed-macos-haptics","CFBundleVersion":"0.12.1"}))
         (app / "_CodeSignature/CodeResources").write_bytes(plistlib.dumps({"files2":{}}))
         macho=bytearray(112)
         struct.pack_into(">II",macho,0,0xcafebabe,2)
@@ -67,6 +68,9 @@ class PackageContract(unittest.TestCase):
                 manifest = json.loads(archive.read("manifest.json"))
                 archives[manifest["platform"]] = {name: archive.read(name) for name in archive.namelist()}
         self.assertEqual(set(archives), {"windows-x64", "linux-proton-x64", "macos-crossover-x64"})
+        for files in archives.values():
+            self.assertIn(b"[ShipCombat]\r\nEnabled=1\r\nStrength=60\r\n",
+                          files["Copy-to-game/ed-onfoot-haptics.ini"])
         mac = archives["macos-crossover-x64"]
         self.assertEqual(set(mac), {"Copy-to-game/dinput8.dll", "Copy-to-game/GameInputRedist.dll",
                          "Copy-to-game/GameInputRawInputProxy.exe", "Copy-to-game/ed-onfoot-haptics.ini",
@@ -105,6 +109,15 @@ class PackageContract(unittest.TestCase):
         path=self.native_mac / "ed-macos-haptics.app/Contents/MacOS/ed-macos-haptics"
         path.write_bytes(b"not a universal executable")
         with self.assertRaisesRegex(ValueError,"Expected universal"):
+            self.assemble()
+        self.assertFalse(self.output.exists())
+
+    def test_previous_mac_checker_prevents_stale_multi_platform_release(self):
+        path = self.native_mac / "ed-macos-haptics.app/Contents/Info.plist"
+        info = plistlib.loads(path.read_bytes())
+        info["CFBundleVersion"] = "0.12.0"
+        path.write_bytes(plistlib.dumps(info))
+        with self.assertRaisesRegex(ValueError, "Expected native Mac companion 0.12.1"):
             self.assemble()
         self.assertFalse(self.output.exists())
 

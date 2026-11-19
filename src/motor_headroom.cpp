@@ -30,14 +30,22 @@ float Bound(float value) noexcept {
 }
 std::uint64_t WINAPI Limited(void* self, float left, float right) noexcept {
   const auto sender = original.load(std::memory_order_acquire);
-  if (active.load(std::memory_order_acquire)) {
-    calls.fetch_add(1, std::memory_order_relaxed);
-    left = Bound(left);
-    right = Bound(right);
+  if (!active.load(std::memory_order_acquire)) return sender(self, left, right);
+  calls.fetch_add(1, std::memory_order_relaxed);
+  left = Bound(left);
+  right = Bound(right);
+  const DWORD incoming = GetLastError();
+  std::uint64_t result;
+  DWORD outgoing;
+  {
+    const MotorSenderScope amplitudes(left, right);
+    // MinGW's first access to thread-local storage can change LastError.
+    SetLastError(incoming);
+    result = sender(self, left, right);
+    outgoing = GetLastError();
   }
-  // No OS calls, allocations or I/O before/after the native function. Native
-  // results, LastError, device index, quiet threshold and transfer stay native.
-  return sender(self, left, right);
+  SetLastError(outgoing);
+  return result;
 }
 bool Match(std::uintptr_t address, const unsigned char* expected, std::size_t length) noexcept {
   if (!address || length > motor_profile::sender_bytes.size() ||

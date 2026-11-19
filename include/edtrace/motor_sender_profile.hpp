@@ -6,6 +6,11 @@
 namespace edtrace::motor_profile {
 inline constexpr std::uintptr_t sender_rva = 0x4d05270;
 inline constexpr std::uintptr_t output_pointer_offset = 0x13517c0;
+// The verified converter emits zero at or below this exact double. The two
+// endpoint values are its float32 results at the first accepted float above it.
+inline constexpr double quiet_cutoff = 0.05;
+inline constexpr double quiet_left_endpoint = 5816.23095703125;
+inline constexpr double quiet_right_endpoint = 11059.150390625;
 // Complete supported runtime sender signature for version guarding. These
 // bytes are guards, not replacement code. PE file offset is 0x4d04670.
 inline constexpr std::array<unsigned char, 203> sender_bytes{{
