@@ -117,13 +117,14 @@ bool Profile(std::uintptr_t image, std::size_t& size) noexcept {
   }
   return true;
 }
-float FeedbackStrength(const std::wstring& path, const wchar_t* section) noexcept {
+float FeedbackStrength(const std::wstring& path, const wchar_t* section,
+                       const wchar_t* key = L"Strength", long fallback = 60, long maximum = 100) noexcept {
   std::array<wchar_t,32> text{};
-  GetPrivateProfileStringW(section,L"Strength",L"60",text.data(),static_cast<DWORD>(text.size()),path.c_str());
+  GetPrivateProfileStringW(section,key,std::to_wstring(fallback).c_str(),text.data(),static_cast<DWORD>(text.size()),path.c_str());
   wchar_t* end = nullptr; long value = std::wcstol(text.data(),&end,10);
-  if (end == text.data() || *end) return .6f;
+  if (end == text.data() || *end) return static_cast<float>(fallback) / 100.0f;
   if (value < 0) value = 0;
-  if (value > 100) value = 100;
+  if (value > maximum) value = maximum;
   return static_cast<float>(value) / 100.0f;
 }
 void SaveStatus() noexcept {
@@ -327,6 +328,7 @@ DWORD WINAPI Run(void*) noexcept {
       StartOnFootFeedback(FeedbackStrength(onfoot_config,L"OnFoot"),ship_requested,
                           FeedbackStrength(onfoot_config,L"ShipCombat"),feedback_requested,
                           &PostAuthoredShipMotion,&CancelAuthoredShipMotion);
+    SetShipWeaponTriggerStrength(FeedbackStrength(onfoot_config,L"ShipCombat",L"TriggerStrength",100,300));
     const auto consumer = supplemental_requested ? &QueueOnFootInput : nullptr;
     const auto ship_begin = ship_requested ? &BeginShipWeaponInput : nullptr;
     const DWORD source_result = consumer ? StartOnFootEventSources(image,size,true,consumer,ship_begin) :
@@ -409,6 +411,7 @@ DWORD WINAPI Run(void*) noexcept {
         if (ship_requested) {
           ship_allowed = GetPrivateProfileIntW(L"ShipCombat",L"Enabled",0,onfoot_config.c_str()) == 1;
           SetShipWeaponFeedbackStrength(FeedbackStrength(onfoot_config,L"ShipCombat"));
+          SetShipWeaponTriggerStrength(FeedbackStrength(onfoot_config,L"ShipCombat",L"TriggerStrength",100,300));
         }
         const auto capture = GetOnFootEventTraceStats();
         const auto trigger_capture = GetAuthoredTriggerTraceStats();
