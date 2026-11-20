@@ -28,7 +28,23 @@ std::atomic<DWORD> started{0}, error{ERROR_NOT_READY}, installed_mask{0};
 std::atomic<std::uint64_t> init_calls{0}, negotiated{0}, initialization_failures{0};
 std::atomic<std::uint64_t> context_overflows{0}, frame_calls{0}, valid_frames{0}, unknown_frames{0};
 std::atomic<std::uint64_t> two_channel_frames{0}, nonfinite_frames{0}, clamped_channels{0}, term_calls{0};
-std::atomic<std::uint64_t> consume_two{0}, consume_four{0};
+std::atomic<std::uint64_t> consume_two{0}, consume_four{0}, nonzero_frames{0};
+std::atomic<std::uint32_t> peak_left{0}, peak_right{0};
+// Channel-order diagnostics: every channel of the sink's four floats and of
+// the four-channel buffers consumed into it, plus the buffers' full
+// AkChannelConfig (count:8, type:4, mask:20).
+std::array<std::atomic<std::uint32_t>, 4> sink_peak{}, buffer_peak{};
+std::array<std::atomic<std::uint64_t>, 4> sink_nonzero{}, buffer_nonzero{};
+std::atomic<std::uint32_t> consume_config{0};
+// Off by default ([Diagnostics] RumbleLog): gates the per-channel reads above
+// and the interval peaks the rumble source log takes every 100 ms.
+std::atomic<bool> diagnostics{false};
+std::array<std::atomic<std::uint32_t>, 4> interval_peak{};
+void Peak(std::atomic<std::uint32_t>& peak, float value) noexcept {
+  const auto milli = static_cast<std::uint32_t>(value * 1000.0f);
+  auto seen = peak.load(std::memory_order_relaxed);
+  while (milli > seen && !peak.compare_exchange_weak(seen, milli, std::memory_order_relaxed)) {}
+}
 constexpr std::array<unsigned char, 32> consume_signature{{
   0x48,0x89,0x5c,0x24,0x10,0x48,0x89,0x6c,0x24,0x20,0x56,0x57,0x8b,0x79,0x0c,0x33,
   0xed,0x89,0x69,0x08,0x48,0x8b,0xf2,0x8b,0x42,0x08,0x4c,0x8b,0xd9,0x0f,0xb6,0xc0
@@ -50,6 +66,19 @@ bool Read(std::uintptr_t address, void* destination, std::size_t size) noexcept 
   SIZE_T count = 0;
   return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), destination,
                            size, &count) && count == size;
+}
+void ObserveSink(std::uintptr_t values, std::size_t channels) noexcept {
+  std::array<float, 4> all{};
+  if (!diagnostics.load(std::memory_order_relaxed) || channels > all.size() ||
+      !Read(values, all.data(), channels * sizeof(float))) return;
+  for (std::size_t c = 0; c < channels; ++c) {
+    if (!std::isfinite(all[c])) continue;
+    float magnitude = std::fabs(all[c]);
+    if (magnitude > 1) magnitude = 1;
+    if (magnitude > 0) sink_nonzero[c].fetch_add(1, std::memory_order_relaxed);
+    Peak(sink_peak[c], magnitude);
+    Peak(interval_peak[c], magnitude);
+  }
 }
 bool SinkHeader(void* self, Sink& sink) noexcept {
   return Read(reinterpret_cast<std::uintptr_t>(self), &sink, sizeof(sink)) &&
@@ -128,15 +157,21 @@ void WINAPI Update(void* self) noexcept {
     frame_calls.fetch_add(1, std::memory_order_relaxed);
     Sink sink{};
     if (SinkHeader(self, sink)) {
-      if (sink.channels == 2) two_channel_frames.fetch_add(1, std::memory_order_relaxed);
+      if (sink.channels == 2) {
+        two_channel_frames.fetch_add(1, std::memory_order_relaxed);
+        if (sink.values) ObserveSink(sink.values, 2);
+      }
       if (ready.load(std::memory_order_acquire) && sink.channels == 4 && sink.values &&
           Known(reinterpret_cast<std::uintptr_t>(self)) &&
           sink.values <= std::numeric_limits<std::uintptr_t>::max() - 16) {
+        ObserveSink(sink.values, 4);
         std::array<float, 2> values{};
         if (Read(sink.values + 8, values.data(), sizeof(values))) {
           if (std::isfinite(values[0]) && std::isfinite(values[1])) {
             current = {true, Bound(values[0]), Bound(values[1])};
             valid_frames.fetch_add(1, std::memory_order_relaxed);
+            if (current.left > 0 || current.right > 0) nonzero_frames.fetch_add(1, std::memory_order_relaxed);
+            Peak(peak_left, current.left); Peak(peak_right, current.right);
           } else nonfinite_frames.fetch_add(1, std::memory_order_relaxed);
         }
       }
@@ -151,6 +186,26 @@ void WINAPI Update(void* self) noexcept {
   SetLastError(outgoing);
 }
 
+// Planar float buffer: data pointer, config, state, max frames, valid frames.
+void ObserveBuffer(std::uintptr_t address) noexcept {
+  struct Header { std::uintptr_t data; std::uint32_t config, state; std::uint16_t max_frames, valid_frames; } header{};
+  if (!Read(address, &header, 0x14) || !header.data || header.data % alignof(float) ||
+      !header.max_frames || header.valid_frames > header.max_frames) return;
+  std::array<float, 1024> samples{};
+  const std::size_t count = header.valid_frames < samples.size() ? header.valid_frames : samples.size();
+  if (!count) return;
+  for (std::size_t c = 0; c < 4; ++c) {
+    const auto offset = c * header.max_frames * sizeof(float);
+    if (header.data > std::numeric_limits<std::uintptr_t>::max() - offset ||
+        !Read(header.data + offset, samples.data(), count * sizeof(float))) return;
+    float peak = 0;
+    for (std::size_t i = 0; i < count; ++i)
+      if (std::isfinite(samples[i]) && std::fabs(samples[i]) > peak) peak = std::fabs(samples[i]);
+    if (peak > 0) buffer_nonzero[c].fetch_add(1, std::memory_order_relaxed);
+    Peak(buffer_peak[c], peak > 1 ? 1 : peak);
+  }
+}
+
 void WINAPI ObserveConsume(void* self, void* buffer, std::uint64_t gain) noexcept {
   const DWORD incoming = GetLastError();
   if (accepting.load(std::memory_order_acquire)) {
@@ -159,7 +214,11 @@ void WINAPI ObserveConsume(void* self, void* buffer, std::uint64_t gain) noexcep
     if (SinkHeader(self, sink) && address && address <= std::numeric_limits<std::uintptr_t>::max() - 12 &&
         Read(address + 8, &config, sizeof(config))) {
       if ((config & 255) == 2) consume_two.fetch_add(1, std::memory_order_relaxed);
-      if ((config & 255) == 4) consume_four.fetch_add(1, std::memory_order_relaxed);
+      if ((config & 255) == 4) {
+        consume_four.fetch_add(1, std::memory_order_relaxed);
+        consume_config.store(config, std::memory_order_relaxed);
+        if (diagnostics.load(std::memory_order_relaxed)) ObserveBuffer(address);
+      }
     }
   }
   SetLastError(incoming);
@@ -284,6 +343,14 @@ DWORD AuthoredTriggersStartControlledFixture(const AuthoredTriggerFixtureTargets
 void AuthoredTriggersSetReady(bool value) noexcept {
   ready.store(value && accepting.load(std::memory_order_acquire), std::memory_order_release);
 }
+void AuthoredTriggersSetDiagnostics(bool enabled) noexcept {
+  diagnostics.store(enabled, std::memory_order_relaxed);
+}
+std::array<std::uint32_t, 4> AuthoredTriggersTakeIntervalPeaks() noexcept {
+  std::array<std::uint32_t, 4> result{};
+  for (std::size_t c = 0; c < result.size(); ++c) result[c] = interval_peak[c].exchange(0, std::memory_order_relaxed);
+  return result;
+}
 void AuthoredTriggersStop() noexcept {
   ready.store(false, std::memory_order_release);
   accepting.store(false, std::memory_order_release);
@@ -305,6 +372,13 @@ AuthoredTriggerStats AuthoredTriggersGetStats() noexcept {
   result.existing_two_channel_frames = two_channel_frames.load(); result.nonfinite_frames = nonfinite_frames.load();
   result.clamped_channels = clamped_channels.load(); result.term_calls = term_calls.load();
   result.consume_two_channel_buffers = consume_two.load(); result.consume_four_channel_buffers = consume_four.load();
+  result.nonzero_frames = nonzero_frames.load();
+  result.peak_left_milli = peak_left.load(); result.peak_right_milli = peak_right.load();
+  result.consume_config = consume_config.load();
+  for (std::size_t c = 0; c < 4; ++c) {
+    result.sink_peak_milli[c] = sink_peak[c].load(); result.sink_nonzero[c] = sink_nonzero[c].load();
+    result.buffer_peak_milli[c] = buffer_peak[c].load(); result.buffer_nonzero[c] = buffer_nonzero[c].load();
+  }
   return result;
 }
 }  // namespace edtrace

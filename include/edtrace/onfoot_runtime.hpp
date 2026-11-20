@@ -16,6 +16,9 @@ void StartOnFootFeedback(float strength, bool ship_enabled = false, float ship_s
                          ShipMotionCancel cancel_motion = nullptr) noexcept;
 void SetOnFootFeedbackStrength(float strength) noexcept;
 void SetShipWeaponFeedbackStrength(float strength) noexcept;
+// Scales the ship weapons' trigger-motor kick: 0 disables, 1 default, up to 3.
+// Scaled channels still clip at full strength.
+void SetShipWeaponTriggerStrength(float strength) noexcept;
 ShipWeaponAdmission BeginShipWeaponInput(OnFootInputKind kind, std::uint64_t object, std::uint32_t id) noexcept;
 // Policy-worker check while its submission gate is held. Native adapters
 // recheck after any stop servicing and immediately before enqueueing a cue.
@@ -26,5 +29,9 @@ void QueueOnFootInput(const OnFootInput& input) noexcept;
 void TickOnFootFeedback(bool ready, std::uint64_t milliseconds, HapticFrame travel = {},
                         bool ship_ready = false) noexcept;
 bool StopOnFootFeedback() noexcept;
+// Peaks of each mod effect source since the previous call. Call from the
+// worker thread that calls TickOnFootFeedback.
+struct ModRumblePeaks { HapticFrame onfoot, ship, sco; };
+ModRumblePeaks TakeModRumblePeaks() noexcept;
 OnFootRuntimeStats GetOnFootRuntimeStats() noexcept;
 }  // namespace edtrace

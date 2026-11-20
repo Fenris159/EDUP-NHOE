@@ -1,6 +1,7 @@
 #include "edtrace/onfoot_runtime.hpp"
 #include "edtrace/xinput_output.hpp"
 #include <array>
+#include <cmath>
 #include <atomic>
 #include <mutex>
 
@@ -34,7 +35,8 @@ std::atomic<std::uint64_t> duplicate_cues{0}, expired_holds{0}, actor_overflows{
 std::atomic<std::uint64_t> ship_motion_posts{0}, ship_motion_rejected{0};
 OnFootHaptics engine;
 ShipWeaponHaptics ship_engine;
-float strength = 0, ship_strength = 0;
+float strength = 0, ship_strength = 0, ship_trigger_strength = 1;
+ModRumblePeaks mod_peaks{};  // Worker thread only, like every Tick caller.
 ShipMotionPost post_ship_motion = nullptr;
 ShipMotionCancel cancel_ship_motion = nullptr;
 
@@ -168,8 +170,12 @@ void SetShipWeaponFeedbackStrength(float value) noexcept {
   }
   ship_strength = next;
 }
+void SetShipWeaponTriggerStrength(float value) noexcept {
+  ship_trigger_strength = std::isfinite(value) && value > 0 ? (value < 3 ? value : 3) : 0;
+}
 void TickOnFootFeedback(bool ready, std::uint64_t now, HapticFrame travel, bool ship_ready) noexcept {
   if (!configured.load(std::memory_order_acquire)) {
+    mod_peaks.sco = HapticMaximum(mod_peaks.sco, travel);
     XInputOutputSetOnFootFrame(travel,HapticNonzero(travel));
     return;
   }
@@ -216,13 +222,23 @@ void TickOnFootFeedback(bool ready, std::uint64_t now, HapticFrame travel, bool 
   }
   // A ship voice with unresolved calls can have a release in flight. Other
   // emitters remain audible after the completed results have been drained.
-  const auto ship_frame = ship_ready ?
+  auto ship_frame = ship_ready ?
       HapticScale(ship_engine.Sample(now,&ShipCallPending),ship_strength) : HapticFrame{};
-  const auto frame = HapticMaximum(HapticScale(engine.Sample(now),strength),ship_frame);
+  ship_frame.left *= ship_trigger_strength; ship_frame.right *= ship_trigger_strength;
+  const auto onfoot_frame = HapticScale(engine.Sample(now),strength);
+  const auto frame = HapticMaximum(onfoot_frame,ship_frame);
+  mod_peaks.onfoot = HapticMaximum(mod_peaks.onfoot, onfoot_frame);
+  mod_peaks.ship = HapticMaximum(mod_peaks.ship, ship_frame);
+  mod_peaks.sco = HapticMaximum(mod_peaks.sco, travel);
   if (HapticNonzero(frame)) output_frames.fetch_add(1,std::memory_order_relaxed);
   XInputOutputSetOnFootFrame(HapticMaximum(frame, travel), ready || ship_ready || HapticNonzero(travel));
   active.store(ready,std::memory_order_release);
   ship_active.store(ship_ready,std::memory_order_release);
+}
+ModRumblePeaks TakeModRumblePeaks() noexcept {
+  const auto result = mod_peaks;
+  mod_peaks = {};
+  return result;
 }
 bool StopOnFootFeedback() noexcept {
   accepting.store(false,std::memory_order_release); active.store(false,std::memory_order_release);

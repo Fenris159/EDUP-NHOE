@@ -47,6 +47,78 @@ const char* controller_output_mode = "auto";
 const char* startup_stage = "profile";
 bool gameinput_attempted = false;
 std::atomic<DWORD> trigger_hook_error{ERROR_NOT_READY}, trigger_trace_error{ERROR_NOT_READY};
+std::atomic<bool> rumble_log_enabled{false};
+std::atomic<std::uint64_t> rumble_log_lines{0};
+std::atomic<DWORD> rumble_log_error{ERROR_SUCCESS};
+
+template <typename T, std::size_t N> std::string JsonArray(const std::array<T, N>& values) {
+  std::string text = "[";
+  for (std::size_t i = 0; i < N; ++i) text += (i ? "," : "") + std::to_string(values[i]);
+  return text + "]";
+}
+// [Diagnostics] RumbleLog=1: every 100 ms with any rumble, one JSON line with
+// the peak of the game's own Motion channels and of each mod effect source
+// (on-foot, ship weapons, SCO), in thousandths, ordered left handle, right
+// handle, left trigger, right trigger. Silent intervals are skipped (one zero
+// line closes each burst). Off by default; capped at 8 MB per session.
+class RumbleLog {
+ public:
+  ~RumbleLog() { if (file_ != INVALID_HANDLE_VALUE) CloseHandle(file_); }
+  void Configure(bool enabled, const std::wstring& directory) noexcept {
+    if (enabled && file_ == INVALID_HANDLE_VALUE && !failed_) Open(directory);
+    enabled = enabled && file_ != INVALID_HANDLE_VALUE && !capped_;
+    if (enabled != enabled_) {
+      enabled_ = enabled;
+      AuthoredTriggersSetDiagnostics(enabled);
+      if (enabled) { AuthoredTriggersTakeIntervalPeaks(); TakeModRumblePeaks(); }
+    }
+    rumble_log_enabled.store(enabled_);
+  }
+  void Sample() noexcept {
+    const auto game = AuthoredTriggersTakeIntervalPeaks();
+    const auto mod = TakeModRumblePeaks();
+    if (!enabled_) return;
+    const bool active = game[0] || game[1] || game[2] || game[3] ||
+                        HapticNonzero(mod.onfoot) || HapticNonzero(mod.ship) || HapticNonzero(mod.sco);
+    if (!active && !previous_) return;
+    previous_ = active;
+    FILETIME now{}; GetSystemTimeAsFileTime(&now);
+    const auto ticks = (static_cast<std::uint64_t>(now.dwHighDateTime) << 32) | now.dwLowDateTime;
+    std::string line = "{\"t\":" + std::to_string(ticks / 10000 - 11644473600000ULL) +
+        ",\"game\":" + JsonArray(game) + ",\"onfoot\":" + Milli(mod.onfoot) +
+        ",\"ship\":" + Milli(mod.ship) + ",\"sco\":" + Milli(mod.sco) + "}\n";
+    if (written_ + line.size() > kCap) {
+      Write("{\"type\":\"cap_reached\"}\n");
+      capped_ = true; enabled_ = false; AuthoredTriggersSetDiagnostics(false); rumble_log_enabled.store(false);
+      return;
+    }
+    if (Write(line)) rumble_log_lines.fetch_add(1, std::memory_order_relaxed);
+  }
+
+ private:
+  static constexpr std::size_t kCap = 8u * 1024 * 1024;
+  static std::string Milli(HapticFrame frame) {
+    const auto milli = [](float value) { return static_cast<std::uint32_t>(HapticUnit(value) * 1000.0f); };
+    return JsonArray(std::array<std::uint32_t, 4>{{milli(frame.low), milli(frame.high), milli(frame.left), milli(frame.right)}});
+  }
+  void Open(const std::wstring& directory) noexcept {
+    const auto path = directory + L"\\rumble-sources-" + std::to_wstring(GetCurrentProcessId()) + L".jsonl";
+    file_ = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file_ == INVALID_HANDLE_VALUE) { failed_ = true; rumble_log_error.store(GetLastError()); return; }
+    Write("{\"type\":\"rumble_sources\",\"schema\":1,\"interval_ms\":100,"
+          "\"units\":\"thousandths\",\"channels\":[\"left_handle\",\"right_handle\",\"left_trigger\",\"right_trigger\"]}\n");
+  }
+  bool Write(const std::string& text) noexcept {
+    DWORD done = 0;
+    if (!WriteFile(file_, text.data(), static_cast<DWORD>(text.size()), &done, nullptr) || done != text.size()) {
+      rumble_log_error.store(GetLastError()); return false;
+    }
+    written_ += done; return true;
+  }
+  HANDLE file_ = INVALID_HANDLE_VALUE;
+  std::size_t written_ = 0;
+  bool enabled_ = false, previous_ = false, failed_ = false, capped_ = false;
+};
 std::atomic<DWORD> onfoot_trace_error{0};
 #ifdef ED_CROSSOVER_COMPAT
 std::atomic<DWORD> output_restore_error{ERROR_SUCCESS};
@@ -117,13 +189,14 @@ bool Profile(std::uintptr_t image, std::size_t& size) noexcept {
   }
   return true;
 }
-float FeedbackStrength(const std::wstring& path, const wchar_t* section) noexcept {
+float FeedbackStrength(const std::wstring& path, const wchar_t* section,
+                       const wchar_t* key = L"Strength", long fallback = 60, long maximum = 100) noexcept {
   std::array<wchar_t,32> text{};
-  GetPrivateProfileStringW(section,L"Strength",L"60",text.data(),static_cast<DWORD>(text.size()),path.c_str());
+  GetPrivateProfileStringW(section,key,std::to_wstring(fallback).c_str(),text.data(),static_cast<DWORD>(text.size()),path.c_str());
   wchar_t* end = nullptr; long value = std::wcstol(text.data(),&end,10);
-  if (end == text.data() || *end) return .6f;
+  if (end == text.data() || *end) return static_cast<float>(fallback) / 100.0f;
   if (value < 0) value = 0;
-  if (value > 100) value = 100;
+  if (value > maximum) value = maximum;
   return static_cast<float>(value) / 100.0f;
 }
 void SaveStatus() noexcept {
@@ -157,6 +230,8 @@ void SaveStatus() noexcept {
       ",\"macos_helper_launched\":" + std::to_string(MacOutputGetStats().launched) +
       ",\"macos_helper_polls\":" + std::to_string(MacOutputGetStats().polls) +
       ",\"macos_frames\":" + std::to_string(MacOutputGetStats().frames) +
+      ",\"macos_trigger_frames\":" + std::to_string(MacOutputGetStats().trigger_frames) +
+      ",\"macos_relaunches\":" + std::to_string(MacOutputGetStats().relaunches) +
       ",\"macos_client_error\":" + std::to_string(MacOutputGetStats().client_error) +
       ",\"macos_native_active\":" + std::to_string(MacOutputGetStats().active) +
       ",\"macos_blocks_fallback\":" + std::to_string(MacOutputGetStats().blocks_fallback) +
@@ -180,9 +255,20 @@ void SaveStatus() noexcept {
       ",\"trigger_contexts\":" + std::to_string(s.trigger_contexts) + ",\"trigger_negotiated\":" + std::to_string(s.trigger_negotiated) +
       ",\"trigger_frames\":" + std::to_string(s.trigger_frames) + ",\"trigger_late_frames\":" + std::to_string(s.trigger_late_frames) +
       ",\"trigger_consume_two\":" + std::to_string(s.trigger_consume_two) + ",\"trigger_consume_four\":" + std::to_string(s.trigger_consume_four) +
+      ",\"trigger_nonzero_frames\":" + std::to_string(s.trigger_nonzero_frames) +
+      ",\"trigger_peak_left_milli\":" + std::to_string(s.trigger_peak_left_milli) +
+      ",\"trigger_peak_right_milli\":" + std::to_string(s.trigger_peak_right_milli) +
+      ",\"trigger_consume_config\":" + std::to_string(s.trigger_consume_config) +
+      ",\"trigger_sink_peak_milli\":" + JsonArray(s.trigger_sink_peak_milli) +
+      ",\"trigger_sink_nonzero\":" + JsonArray(s.trigger_sink_nonzero) +
+      ",\"trigger_buffer_peak_milli\":" + JsonArray(s.trigger_buffer_peak_milli) +
+      ",\"trigger_buffer_nonzero\":" + JsonArray(s.trigger_buffer_nonzero) +
       ",\"gameinput_supported_motors\":" + std::to_string(s.gameinput_supported_motors) + ",\"gameinput_trigger_submissions\":" + std::to_string(s.gameinput_trigger_submissions) +
       ",\"trigger_trace_error\":" + std::to_string(s.trigger_trace_error) +
       ",\"trigger_trace_time_limit_reached\":" + std::to_string(s.trigger_trace_time_limit_reached) +
+      ",\"rumble_log\":" + std::to_string(rumble_log_enabled.load()) +
+      ",\"rumble_log_lines\":" + std::to_string(rumble_log_lines.load()) +
+      ",\"rumble_log_error\":" + std::to_string(rumble_log_error.load()) +
       ",\"gameinput_compat_error\":" + std::to_string(s.gameinput_compat_error) + ",\"gameinput_compat_ready\":" + std::to_string(s.gameinput_compat_ready) +
       ",\"gameinput_compat_waiting_zero\":" + std::to_string(s.gameinput_compat_waiting_zero) + ",\"gameinput_compat_pending_stop\":" + std::to_string(s.gameinput_compat_pending_stop) +
       ",\"gameinput_hid_error\":" + std::to_string(s.gameinput_hid_error) + ",\"gameinput_hid_write_error\":" + std::to_string(s.gameinput_hid_write_error) +
@@ -327,6 +413,7 @@ DWORD WINAPI Run(void*) noexcept {
       StartOnFootFeedback(FeedbackStrength(onfoot_config,L"OnFoot"),ship_requested,
                           FeedbackStrength(onfoot_config,L"ShipCombat"),feedback_requested,
                           &PostAuthoredShipMotion,&CancelAuthoredShipMotion);
+    SetShipWeaponTriggerStrength(FeedbackStrength(onfoot_config,L"ShipCombat",L"TriggerStrength",100,300));
     const auto consumer = supplemental_requested ? &QueueOnFootInput : nullptr;
     const auto ship_begin = ship_requested ? &BeginShipWeaponInput : nullptr;
     const DWORD source_result = consumer ? StartOnFootEventSources(image,size,true,consumer,ship_begin) :
@@ -364,7 +451,9 @@ DWORD WINAPI Run(void*) noexcept {
     if (result) throw result;
     start_error.store(ERROR_SUCCESS, std::memory_order_release);
     startup_stage = "running";
-    bool previous_ready = false; unsigned ticks = 0, control_ticks = 0;
+    bool previous_ready = false; unsigned ticks = 0, control_ticks = 0, log_ticks = 0;
+    RumbleLog rumble_log;
+    rumble_log.Configure(GetPrivateProfileIntW(L"Diagnostics",L"RumbleLog",0,onfoot_config.c_str()) == 1, log_directory);
     while (WaitForSingleObject(stop_event, 20) != WAIT_OBJECT_0) {
       XINPUT_CAPABILITIES capability{};
       const auto gain = NaturalRestorationGetStatus();
@@ -400,8 +489,10 @@ DWORD WINAPI Run(void*) noexcept {
       const auto now = GetTickCount64();
       TickOnFootFeedback(feedback_allowed && feedback_ready, now, sco.Tick(feedback_ready, now), ship_allowed && feedback_ready);
       ServiceAuthoredShipMotion();
+      if (++log_ticks >= 5) { log_ticks = 0; rumble_log.Sample(); }
       if (++control_ticks >= 25) {
         control_ticks = 0;
+        rumble_log.Configure(GetPrivateProfileIntW(L"Diagnostics",L"RumbleLog",0,onfoot_config.c_str()) == 1, log_directory);
         if (feedback_requested) {
           feedback_allowed = GetPrivateProfileIntW(L"OnFoot",L"Enabled",0,onfoot_config.c_str()) == 1;
           SetOnFootFeedbackStrength(FeedbackStrength(onfoot_config,L"OnFoot"));
@@ -409,6 +500,7 @@ DWORD WINAPI Run(void*) noexcept {
         if (ship_requested) {
           ship_allowed = GetPrivateProfileIntW(L"ShipCombat",L"Enabled",0,onfoot_config.c_str()) == 1;
           SetShipWeaponFeedbackStrength(FeedbackStrength(onfoot_config,L"ShipCombat"));
+          SetShipWeaponTriggerStrength(FeedbackStrength(onfoot_config,L"ShipCombat",L"TriggerStrength",100,300));
         }
         const auto capture = GetOnFootEventTraceStats();
         const auto trigger_capture = GetAuthoredTriggerTraceStats();
@@ -568,6 +660,11 @@ RestorationStatus RestorationGetStatus() noexcept {
   result.trigger_contexts = static_cast<DWORD>(triggers.registered_contexts);
   result.trigger_negotiated = triggers.negotiated; result.trigger_frames = triggers.valid_frames; result.trigger_late_frames = triggers.existing_two_channel_frames;
   result.trigger_consume_two = triggers.consume_two_channel_buffers; result.trigger_consume_four = triggers.consume_four_channel_buffers;
+  result.trigger_nonzero_frames = triggers.nonzero_frames;
+  result.trigger_peak_left_milli = triggers.peak_left_milli; result.trigger_peak_right_milli = triggers.peak_right_milli;
+  result.trigger_consume_config = triggers.consume_config;
+  result.trigger_sink_peak_milli = triggers.sink_peak_milli; result.trigger_buffer_peak_milli = triggers.buffer_peak_milli;
+  result.trigger_sink_nonzero = triggers.sink_nonzero; result.trigger_buffer_nonzero = triggers.buffer_nonzero;
   result.gameinput_supported_motors = gameinput.supported_motors; result.gameinput_trigger_submissions = gameinput.trigger_submissions;
   result.trigger_trace_error = trigger_trace_error.load();
   result.trigger_trace_time_limit_reached = GetAuthoredTriggerTraceStats().time_limit_reached;
