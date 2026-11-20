@@ -12,6 +12,7 @@
 extern "C" edtrace::MotorBackend __imp_XInputSetState;
 #endif
 #include "edtrace/motor_headroom.hpp"
+#include "MinHook.h"
 #include "edtrace/motor_ownership.hpp"
 #include "edtrace/natural_probe.hpp"
 #include "edtrace/gameinput_output.hpp"
@@ -131,6 +132,7 @@ void SaveStatus() noexcept {
       ",\"output_hook_error\":" + std::to_string(XInputOutputGetStats().error) +
       ",\"headroom_error\":" + std::to_string(MotorHeadroomGetStats().installation_error) +
       ",\"headroom_minhook_status\":" + std::to_string(MotorHeadroomGetStats().minhook_status) +
+      ",\"minhook_fallback_slots\":" + std::to_string(MH_GetFallbackSlotsInUse()) +
       ",\"headroom_frame_slot\":" + std::to_string(MotorHeadroomGetStats().frame_slot) +
       ",\"headroom_frame_slot_rollback_error\":" + std::to_string(MotorHeadroomGetStats().frame_slot_rollback_error) +
       ",\"controller_output_mode\":\"" + controller_output_mode + "\"" +
