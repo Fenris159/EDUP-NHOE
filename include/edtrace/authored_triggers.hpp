@@ -19,6 +19,14 @@ struct AuthoredTriggerStats {
   std::uint64_t existing_two_channel_frames = 0, nonfinite_frames = 0;
   std::uint64_t clamped_channels = 0, term_calls = 0;
   std::uint64_t consume_two_channel_buffers = 0, consume_four_channel_buffers = 0;
+  // Valid frames with a non-zero trigger channel, and the peak of each channel
+  // in thousandths: tells "the game authored nothing" from "output dropped it".
+  std::uint64_t nonzero_frames = 0;
+  std::uint32_t peak_left_milli = 0, peak_right_milli = 0;
+  // Per channel 0-3: sink values and consumed four-channel buffers.
+  std::uint32_t consume_config = 0;
+  std::array<std::uint32_t, 4> sink_peak_milli{}, buffer_peak_milli{};
+  std::array<std::uint64_t, 4> sink_nonzero{}, buffer_nonzero{};
 };
 
 // Call outside DllMain. The caller must verify the complete game-file hash.
@@ -26,6 +34,11 @@ struct AuthoredTriggerStats {
 // It changes only freshly initialized native Motion output formats, never an
 // already allocated two-channel accumulator, and invokes no output transport.
 DWORD AuthoredTriggersStart(std::uintptr_t image, std::size_t size, bool verified) noexcept;
+// Per-channel diagnostics (status channel peaks, rumble source log). Off by
+// default; when off, those status fields stay zero and no extra reads happen.
+void AuthoredTriggersSetDiagnostics(bool enabled) noexcept;
+// Peak of each game Motion channel (thousandths) since the previous call.
+std::array<std::uint32_t, 4> AuthoredTriggersTakeIntervalPeaks() noexcept;
 void AuthoredTriggersSetReady(bool ready) noexcept;
 // Permanently disables format mutation/capture; installed hooks only forward.
 void AuthoredTriggersStop() noexcept;
