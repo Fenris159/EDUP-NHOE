@@ -70,15 +70,24 @@ def main():
             if arguments[:4]!=["-g","-n","-a",str(native / "ed-macos-haptics.app")] or arguments[4:6]!=["--args","--port"] or not 0<int(arguments[6])<65536 or arguments[7:]!=["--token","5a"*16,"--status",str(capture)]:
                 raise RuntimeError("Native launcher arguments changed or lost literal path characters")
         backend = windows(build / "verification/backend/ed_rumble_real_xinput9_1_0.dll")
+        run("minhook_image_fallback", build / "minhook_image_fallback_verification.exe", [backend])
+        for mode in ("patch-restore", "remove-retry", "create-retry", "rip-range", "patch-clearance", "near-retry",
+                     "thread-context"):
+            run("minhook_image_" + mode.replace("-", "_"), build / "minhook_image_fallback_verification.exe",
+                [backend, mode])
         for mode in ("verified", "unknown"):
             run("output_" + mode, build / "xinput_output_verification.exe", [backend, mode], result=True)
             run("crossover_output_" + mode, build / "crossover_output_verification.exe", [backend, mode], result=True)
         run("crossover_output_alias", build / "crossover_output_verification.exe", [backend, "alias"], result=True)
+        run("page_protection_copy_on_write", build / "page_protection_verification.exe", result=True)
+        run("page_protection_readonly_reproduces_fault", build / "page_protection_verification.exe", ["readonly"], result=True)
         run("motor_headroom_frame_slot", build / "motor_headroom_slot_verification.exe")
         run("motor_headroom_foreign_slot", build / "motor_headroom_slot_verification.exe", ["foreign"])
         run("motor_headroom_initialize_failure", build / "motor_headroom_slot_verification.exe", ["initialize"])
         run("motor_headroom_failed_readback", build / "motor_headroom_slot_verification.exe", ["readback"])
         run("motor_headroom_rollback_retry", build / "motor_headroom_slot_verification.exe", ["readback-retry"])
+        run("motor_headroom_writecopy", build / "motor_headroom_slot_verification.exe", ["writecopy"])
+        run("motor_headroom_writecopy_conflict", build / "motor_headroom_slot_verification.exe", ["writecopy-conflict"])
         run("dinput_controlled", build / "dinput_proxy_verification.exe",
             [windows(build / "verification/dinput/dinput8.dll"), "controlled"], result=True)
         run("dinput_system", build / "dinput_proxy_verification.exe",

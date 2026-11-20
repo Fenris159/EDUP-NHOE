@@ -12,6 +12,7 @@
 extern "C" edtrace::MotorBackend __imp_XInputSetState;
 #endif
 #include "edtrace/motor_headroom.hpp"
+#include "MinHook.h"
 #include "edtrace/motor_ownership.hpp"
 #include "edtrace/natural_probe.hpp"
 #include "edtrace/gameinput_output.hpp"
@@ -56,6 +57,16 @@ template <typename T> T Symbol(HMODULE module, const char* name) noexcept {
   const auto address = GetProcAddress(module, name); T result{};
   static_assert(sizeof(result) == sizeof(address)); std::memcpy(&result, &address, sizeof(result)); return result;
 }
+#ifdef ED_CROSSOVER_COMPAT
+bool IsArmCrossOver() noexcept {
+  if (GetFileAttributesW(L"\\\\?\\unix/System/Library/CoreServices/SystemVersion.plist") == INVALID_FILE_ATTRIBUTES)
+    return false;
+  using MachineQuery = BOOL (WINAPI*)(HANDLE, USHORT*, USHORT*);
+  const auto query = Symbol<MachineQuery>(GetModuleHandleW(L"kernel32.dll"), "IsWow64Process2");
+  USHORT process = 0, native = 0;
+  return query && query(GetCurrentProcess(), &process, &native) && native == IMAGE_FILE_MACHINE_ARM64;
+}
+#endif
 std::wstring Path(HMODULE module) {
   std::array<wchar_t, 32768> value{};
   const DWORD size = GetModuleFileNameW(module, value.data(), static_cast<DWORD>(value.size()));
@@ -131,6 +142,7 @@ void SaveStatus() noexcept {
       ",\"output_hook_error\":" + std::to_string(XInputOutputGetStats().error) +
       ",\"headroom_error\":" + std::to_string(MotorHeadroomGetStats().installation_error) +
       ",\"headroom_minhook_status\":" + std::to_string(MotorHeadroomGetStats().minhook_status) +
+      ",\"minhook_fallback_slots\":" + std::to_string(MH_GetFallbackSlotsInUse()) +
       ",\"headroom_frame_slot\":" + std::to_string(MotorHeadroomGetStats().frame_slot) +
       ",\"headroom_frame_slot_rollback_error\":" + std::to_string(MotorHeadroomGetStats().frame_slot_rollback_error) +
       ",\"controller_output_mode\":\"" + controller_output_mode + "\"" +
@@ -232,6 +244,9 @@ DWORD WINAPI Run(void*) noexcept {
     std::size_t size = 0;
     if (Hash(Path(nullptr)) != kGameSha256 || !Profile(image, size)) throw DWORD(ERROR_REVISION_MISMATCH);
     profile_match.store(true, std::memory_order_release);
+#ifdef ED_CROSSOVER_COMPAT
+    if (IsArmCrossOver()) MH_EnableMainImageFallback();
+#endif
     const auto executable = Path(nullptr);
     const auto directory = executable.substr(0, executable.find_last_of(L"\\/"));
     const auto onfoot_config = directory + L"\\ed-onfoot-haptics.ini";

@@ -177,6 +177,14 @@ extern "C" {
     // Applies all queued changes in one go.
     MH_STATUS WINAPI MH_ApplyQueued(VOID);
 
+    // EDUP-NHOE: permit verified main-executable code to use its .text tail.
+    // The caller must validate the executable and the affected platform first.
+    BOOL WINAPI MH_EnableMainImageFallback(VOID);
+
+    // EDUP-NHOE: occupied fallback slots in executable section padding,
+    // including slots awaiting cleanup after a failed creation or removal.
+    UINT WINAPI MH_GetFallbackSlotsInUse(VOID);
+
     // Translates the MH_STATUS to its name as a string.
     const char * WINAPI MH_StatusToString(MH_STATUS status);
 

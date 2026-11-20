@@ -27,6 +27,7 @@
  */
 
 #include <windows.h>
+#include <stdint.h>
 
 #if defined(_MSC_VER) && !defined(MINHOOK_DISABLE_INTRINSICS)
     #define ALLOW_INTRINSICS
@@ -74,7 +75,7 @@ static BOOL IsCodePadding(LPBYTE pInst, UINT size)
 }
 
 //-------------------------------------------------------------------------
-BOOL CreateTrampolineFunction(PTRAMPOLINE ct)
+BOOL CreateTrampolineFunction(PTRAMPOLINE ct, LPBYTE code)
 {
 #if defined(_M_X64) || defined(__x86_64__)
     CALL_ABS call = {
@@ -151,6 +152,9 @@ BOOL CreateTrampolineFunction(PTRAMPOLINE ct)
 
             // Modify the RIP relative address.
             PUINT32 pRelAddr;
+            INT64 displacement = (INT64)pOldInst - (INT64)pNewInst + (INT32)hs.disp.disp32;
+            if (displacement < INT32_MIN || displacement > INT32_MAX)
+                return FALSE;
 
             // Avoid using memcpy to reduce the footprint.
 #ifndef ALLOW_INTRINSICS
@@ -162,8 +166,7 @@ BOOL CreateTrampolineFunction(PTRAMPOLINE ct)
 
             // Relative address is stored at (instruction length - immediate value length - 4).
             pRelAddr = (PUINT32)(instBuf + hs.len - ((hs.flags & 0x3C) >> 2) - 4);
-            *pRelAddr
-                = (UINT32)((pOldInst + hs.len + (INT32)hs.disp.disp32) - (pNewInst + hs.len));
+            *pRelAddr = (UINT32)(INT32)displacement;
 
             // Complete the function if JMP (FF /4).
             if (hs.opcode == 0xFF && hs.modrm_reg == 4)
@@ -279,9 +282,9 @@ BOOL CreateTrampolineFunction(PTRAMPOLINE ct)
 
         // Avoid using memcpy to reduce the footprint.
 #ifndef ALLOW_INTRINSICS
-        memcpy((LPBYTE)ct->pTrampoline + newPos, pCopySrc, copySize);
+        memcpy(code + newPos, pCopySrc, copySize);
 #else
-        __movsb((LPBYTE)ct->pTrampoline + newPos, (LPBYTE)pCopySrc, copySize);
+        __movsb(code + newPos, (LPBYTE)pCopySrc, copySize);
 #endif
         newPos += copySize;
         oldPos += hs.len;
@@ -313,7 +316,7 @@ BOOL CreateTrampolineFunction(PTRAMPOLINE ct)
     jmp.address = (ULONG_PTR)ct->pDetour;
 
     ct->pRelay = (LPBYTE)ct->pTrampoline + newPos;
-    memcpy(ct->pRelay, &jmp, sizeof(jmp));
+    memcpy(code + newPos, &jmp, sizeof(jmp));
 #endif
 
     return TRUE;
