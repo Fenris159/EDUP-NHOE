@@ -14,6 +14,12 @@ extern "C" edtrace::MotorBackend __imp_XInputSetState;
 #endif
 #include "edtrace/motor_headroom.hpp"
 #include "MinHook.h"
+#if __has_include("edup_version.h")
+#include "edup_version.h"
+#endif
+#ifndef EDUP_BUILD_DESCRIBE
+#define EDUP_BUILD_DESCRIBE "unknown"
+#endif
 #include "edtrace/motor_ownership.hpp"
 #include "edtrace/natural_probe.hpp"
 #include "edtrace/gameinput_output.hpp"
@@ -130,7 +136,7 @@ void SaveStatus() noexcept {
   try {
     const auto s = RestorationGetStatus();
     const auto supplemental = GetOnFootRuntimeStats();
-    const std::string text = std::string("{\"schema\":8,\"host\":\"dinput8\",\"output\":\"") +
+    const std::string text = std::string("{\"schema\":8,\"build\":\"" EDUP_BUILD_DESCRIBE "\",\"host\":\"dinput8\",\"output\":\"") +
 #ifdef ED_CROSSOVER_COMPAT
       (MacOutputGetStats().active ? "macos-corehaptics" : MacOutputGetStats().blocks_fallback ? "macos-handoff" :
 #endif
