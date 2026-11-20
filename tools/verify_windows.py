@@ -71,6 +71,10 @@ def main():
                 raise RuntimeError("Native launcher arguments changed or lost literal path characters")
         backend = windows(build / "verification/backend/ed_rumble_real_xinput9_1_0.dll")
         run("minhook_image_fallback", build / "minhook_image_fallback_verification.exe", [backend])
+        for mode in ("patch-restore", "remove-retry", "create-retry", "rip-range", "patch-clearance", "near-retry",
+                     "thread-context"):
+            run("minhook_image_" + mode.replace("-", "_"), build / "minhook_image_fallback_verification.exe",
+                [backend, mode])
         for mode in ("verified", "unknown"):
             run("output_" + mode, build / "xinput_output_verification.exe", [backend, mode], result=True)
             run("crossover_output_" + mode, build / "crossover_output_verification.exe", [backend, mode], result=True)
